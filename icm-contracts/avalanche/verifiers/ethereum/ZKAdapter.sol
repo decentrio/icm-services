@@ -9,7 +9,8 @@ import {ZKStateManager} from "./ZKStateManager.sol";
 import {
     TeleporterICMMessage,
     TeleporterMessageV2,
-    IAdapter
+    IAdapter,
+    ITeleporterMessengerV2
 } from "../../../common/ITeleporterMessengerV2.sol";
 import {Consensus, Execution, Receipt} from "./StateManagerLibrary.sol";
 
@@ -64,11 +65,20 @@ contract ZKAdapter is ZKStateManager, IAdapter {
 
     /**
      * @notice Originates a message by emitting it as a log for the relayer to prove.
+     * @dev Only the message's originTeleporterAddress, or the adapter that messenger sends through (e.g. an
+     * Adapter wrapper dispatching by destination chain), may call this. verifyMessage on the destination
+     * chain accepts any log emitted by this same address, so without this check anyone could originate a
+     * message that is delivered as if the messenger had sent it. See {ITeleporterMessengerV2-messageSender}.
      */
     function sendMessage(
         TeleporterMessageV2 calldata message
     ) external {
-        require(msg.sender == message.originTeleporterAddress, "unauthorized sender");
+        require(
+            msg.sender == message.originTeleporterAddress
+                || msg.sender
+                    == address(ITeleporterMessengerV2(message.originTeleporterAddress).messageSender()),
+            "unauthorized sender"
+        );
         emit TeleporterV2MessageSent(abi.encode(message));
     }
 
