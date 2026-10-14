@@ -270,17 +270,18 @@ H->>H: release tokens to recipient
   - [x] `ZKAdapter` (6)
 - [x] Go bindings for ICTT v2, and `ZKAdapter` bindings regenerated
 - [x] `forge fmt` (v1.0.0, the version CI uses) and solhint pass
-- [ ] Commit and open a PR
+- [x] Commit and push (`decentrio/hieu/ictt-v2`)
+- [ ] Open a PR
 - [ ] Native Remote on v2 (deferred; v1 Native Remote works with a v2 Home)
 
 #### Phase 2: Avalanche → Ethereum (local)
 
-- [ ] Test helpers:
-  - [ ] deploy ICTT v2 and configure routes
-  - [ ] deploy the two-way bridge (`Adapter` and messenger) on both chains
-- [ ] Register the Remote. This goes Ethereum → Avalanche, so it uses the mock verifier and a manual relay.
-- [ ] Send Avalanche → Ethereum over the real Merkle/BLS path; the Remote mints
-- [ ] Send-and-call to a contract on Ethereum
+- [x] Test helpers:
+  - [x] deploy ICTT v2 and configure routes
+  - [x] deploy the two-way bridge (`Adapter` and messenger) on both chains
+- [x] Register the Remote. This goes Ethereum → Avalanche, so it uses the mock verifier and a manual relay.
+- [x] Send Avalanche → Ethereum over the real Merkle/BLS path; the Remote mints
+- [x] Send-and-call to a contract on Ethereum
 - [ ] Multi-hop: another Avalanche L1 → Home → Ethereum
 - [ ] Negative test: delivery from the wrong messenger is rejected
 - [ ] Avalanche → Ethereum delivered by the relayer instead of a manual relay
