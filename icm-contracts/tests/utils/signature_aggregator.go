@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/ava-labs/avalanchego/ids"
@@ -26,6 +27,8 @@ import (
 const (
 	DEFAULT_API_PORT = 8080
 	SIG_AGG_API_PATH = "/aggregate-signatures"
+	// SIG_AGG_API_PORT_ENV overrides DEFAULT_API_PORT, e.g. when another local process already listens on it.
+	SIG_AGG_API_PORT_ENV = "SIG_AGG_API_PORT"
 )
 
 // This is a wrapper around a signature aggregator binary instead of importing the package directly
@@ -33,6 +36,7 @@ const (
 type SignatureAggregator struct {
 	cmd        *exec.Cmd
 	cancelFunc context.CancelFunc
+	apiPort    int
 }
 
 type SignatureAggregatorConfig struct {
@@ -73,6 +77,7 @@ func NewSignatureAggregator(apiUri string, subnetIDs []ids.ID) *SignatureAggrega
 	for _, subnetID := range subnetIDs {
 		subnetIDStrings = append(subnetIDStrings, subnetID.String())
 	}
+	apiPort := signatureAggregatorAPIPort()
 	cfg := SignatureAggregatorConfig{
 		PChainAPI: ApiConfig{
 			BaseURL: apiUri,
@@ -81,7 +86,7 @@ func NewSignatureAggregator(apiUri string, subnetIDs []ids.ID) *SignatureAggrega
 			BaseURL: apiUri,
 		},
 		SubnetIDs:       subnetIDStrings,
-		ApiPort:         DEFAULT_API_PORT,
+		ApiPort:         apiPort,
 		AllowPrivateIPs: true,
 	}
 	// write config to a JSON file in /tmp directory
@@ -115,7 +120,19 @@ func NewSignatureAggregator(apiUri string, subnetIDs []ids.ID) *SignatureAggrega
 	return &SignatureAggregator{
 		cancelFunc: cancel,
 		cmd:        cmd,
+		apiPort:    apiPort,
 	}
+}
+
+// signatureAggregatorAPIPort returns the port set in SIG_AGG_API_PORT, or DEFAULT_API_PORT if unset.
+func signatureAggregatorAPIPort() int {
+	portStr := os.Getenv(SIG_AGG_API_PORT_ENV)
+	if portStr == "" {
+		return DEFAULT_API_PORT
+	}
+	port, err := strconv.Atoi(portStr)
+	Expect(err).Should(BeNil(), "invalid %s %q", SIG_AGG_API_PORT_ENV, portStr)
+	return port
 }
 
 func (s *SignatureAggregator) CreateSignedMessage(
@@ -167,7 +184,7 @@ func (s *SignatureAggregator) createSignedMessage(
 	client := &http.Client{
 		Timeout: 40 * time.Second,
 	}
-	requestURL := fmt.Sprintf("http://localhost:%d%s", DEFAULT_API_PORT, SIG_AGG_API_PATH)
+	requestURL := fmt.Sprintf("http://localhost:%d%s", s.apiPort, SIG_AGG_API_PATH)
 	reqBody := AggregateSignaturesRequest{
 		Message:          hex.EncodeToString(unsignedMessage.Bytes()),
 		Justification:    hex.EncodeToString(justification),
