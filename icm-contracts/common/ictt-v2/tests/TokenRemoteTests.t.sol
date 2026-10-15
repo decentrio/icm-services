@@ -636,6 +636,15 @@ abstract contract TokenRemoteTest is TokenTransferrerTest {
         });
     }
 
+    /**
+     * @dev A remote only talks to its home's chain, so one messenger carries all its messages.
+     */
+    function _messengerFor(
+        bytes32
+    ) internal pure override returns (address) {
+        return MOCK_TELEPORTER_MESSENGER_ADDRESS;
+    }
+
     function _getDefaultMessageSourceBlockchainID() internal pure override returns (bytes32) {
         return DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID;
     }

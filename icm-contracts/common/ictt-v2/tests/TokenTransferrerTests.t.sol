@@ -250,25 +250,26 @@ abstract contract TokenTransferrerTest is Test {
 
     function _checkExpectedWithdrawal(address recipient, uint256 amount) internal virtual;
 
+    /**
+     * @dev Expects the message to leave through the messenger of its destination chain.
+     */
     function _checkExpectedTeleporterCallsForSend(
         TeleporterMessageInput memory expectedMessageInput
     ) internal {
+        address messenger = _messengerFor(expectedMessageInput.destinationBlockchainID);
         if (expectedMessageInput.feeInfo.amount > 0) {
             vm.expectCall(
                 expectedMessageInput.feeInfo.feeTokenAddress,
-                abi.encodeCall(
-                    IERC20.allowance,
-                    (address(tokenTransferrer), address(MOCK_TELEPORTER_MESSENGER_ADDRESS))
-                )
+                abi.encodeCall(IERC20.allowance, (address(tokenTransferrer), messenger))
             );
         }
         vm.mockCall(
-            MOCK_TELEPORTER_MESSENGER_ADDRESS,
+            messenger,
             abi.encodeCall(ITeleporterMessenger.sendCrossChainMessage, (expectedMessageInput)),
             abi.encode(_MOCK_MESSAGE_ID)
         );
         vm.expectCall(
-            MOCK_TELEPORTER_MESSENGER_ADDRESS,
+            messenger,
             abi.encodeCall(ITeleporterMessenger.sendCrossChainMessage, (expectedMessageInput))
         );
     }
@@ -277,6 +278,13 @@ abstract contract TokenTransferrerTest is Test {
     function _scaleTokens(uint256 amount, bool) internal virtual returns (uint256) {
         return amount;
     }
+
+    /**
+     * @dev The mock messenger that carries messages to and from `blockchainID`.
+     */
+    function _messengerFor(
+        bytes32 blockchainID
+    ) internal view virtual returns (address);
 
     function _createDefaultSendTokensInput()
         internal

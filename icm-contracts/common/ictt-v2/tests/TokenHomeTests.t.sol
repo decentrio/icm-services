@@ -7,6 +7,7 @@ pragma solidity 0.8.30;
 
 import {TokenTransferrerTest} from "./TokenTransferrerTests.t.sol";
 import {TokenHome} from "../TokenHome/TokenHome.sol";
+import {ITeleporterSender} from "../../ITeleporterRoutedApp.sol";
 import {RemoteTokenTransferrerSettings} from
     "../../../avalanche/ictt/TokenHome/interfaces/ITokenHome.sol";
 import {
@@ -172,7 +173,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
 
     function testReceiveInvalidMessage() public {
         vm.expectRevert();
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, bytes("test")
         );
@@ -180,7 +181,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
 
     function testReceiveFromNonRegisteredRemote() public {
         vm.expectRevert(_formatErrorMessage("remote not registered"));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -193,7 +194,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, 100
         );
         vm.expectRevert(_formatErrorMessage("remote not collateralized"));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -211,7 +212,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, collateralAmount
         );
         vm.expectRevert(_formatErrorMessage("insufficient token transfer balance"));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -228,7 +229,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         uint256 withdrawAmount = amount / 2;
 
         _checkExpectedWithdrawal(DEFAULT_RECIPIENT_ADDRESS, withdrawAmount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -276,7 +277,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             fallbackRecipient: DEFAULT_FALLBACK_RECIPIENT_ADDRESS
         });
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, originInfo.tokenTransferrerAddress, message
         );
@@ -313,7 +314,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             fallbackRecipient: DEFAULT_FALLBACK_RECIPIENT_ADDRESS
         });
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, originInfo.tokenTransferrerAddress, message
         );
@@ -339,7 +340,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             fallbackRecipient: DEFAULT_FALLBACK_RECIPIENT_ADDRESS
         });
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert(_formatErrorMessage("mismatched source blockchain ID"));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, message
@@ -371,7 +372,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             fallbackRecipient: DEFAULT_FALLBACK_RECIPIENT_ADDRESS
         });
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert(_formatErrorMessage("mismatched origin sender address"));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, originTokenTransferrerAddress, message
@@ -386,7 +387,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since it
         // is not registered. Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -412,7 +413,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since it is not yet
         // fully collateralized. Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -438,7 +439,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since the token
         // amount would be scaled to zero. Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -478,7 +479,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         vm.expectEmit(true, true, true, true, address(tokenHome));
         emit TokensRouted(_MOCK_MESSAGE_ID, input, transferAmount);
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -515,7 +516,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         });
 
         vm.expectRevert(_formatErrorMessage("insufficient amount to cover fees"));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -547,7 +548,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since it is not registered.
         // Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         address originSenderAddress = address(this);
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
@@ -578,7 +579,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since it is not yet
         // fully collateralized. Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         address originSenderAddress = address(this);
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
@@ -609,7 +610,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         // The multi-hop will not be routed to the OTHER_BLOCKCHAIN_ID remote since the token
         // amount would be scaled to zero. Instead, the tokens are sent to the multi-hop fallback.
         _checkExpectedWithdrawal(DEFAULT_MULTIHOP_FALLBACK_ADDRESS, amount);
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         address originSenderAddress = address(this);
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
@@ -662,7 +663,114 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
         vm.expectEmit(true, true, true, true, address(tokenHome));
         emit TokensAndCallRouted(_MOCK_MESSAGE_ID, input, transferAmount);
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
+        tokenHome.receiveTeleporterMessage(
+            DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
+            DEFAULT_TOKEN_REMOTE_ADDRESS,
+            _encodeMultiHopCallMessage({
+                originSenderAddress: originInfo.senderAddress,
+                amount: amount,
+                destinationBlockchainID: input.destinationBlockchainID,
+                destinationTokenTransferrerAddress: input.destinationTokenTransferrerAddress,
+                recipientContract: input.recipientContract,
+                recipientPayload: input.recipientPayload,
+                recipientGasLimit: input.recipientGasLimit,
+                fallbackRecipient: input.fallbackRecipient,
+                multiHopFallback: DEFAULT_MULTIHOP_FALLBACK_ADDRESS,
+                secondaryRequiredGasLimit: input.requiredGasLimit,
+                secondaryFee: input.primaryFee
+            })
+        );
+    }
+
+    /**
+     * The tests above forward to a remote on the source chain. These forward to a remote on another
+     * chain, so the second hop must leave through that chain's messenger, not the one that delivered
+     * the first hop.
+     */
+    function testMultiHopSendToOtherChain() public {
+        uint256 amount = 200_000;
+        _sendSingleHopSendSuccess(amount, 0);
+        _setUpRegisteredRemote(OTHER_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, 0);
+
+        uint256 feeAmount = 1;
+        uint256 transferAmount = amount - feeAmount;
+        SendTokensInput memory input = SendTokensInput({
+            destinationBlockchainID: OTHER_BLOCKCHAIN_ID,
+            destinationTokenTransferrerAddress: DEFAULT_TOKEN_REMOTE_ADDRESS,
+            recipient: DEFAULT_RECIPIENT_ADDRESS,
+            primaryFeeTokenAddress: address(transferredToken),
+            primaryFee: feeAmount,
+            secondaryFee: 0,
+            requiredGasLimit: DEFAULT_REQUIRED_GAS_LIMIT,
+            multiHopFallback: DEFAULT_MULTIHOP_FALLBACK_ADDRESS
+        });
+        _checkExpectedTeleporterCallsForSend(
+            _createSingleHopTeleporterMessageInput(input, transferAmount)
+        );
+
+        vm.expectEmit(true, true, true, true, address(tokenHome));
+        emit TokensRouted(_MOCK_MESSAGE_ID, input, transferAmount);
+
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
+        tokenHome.receiveTeleporterMessage(
+            DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
+            DEFAULT_TOKEN_REMOTE_ADDRESS,
+            _encodeMultiHopSendMessage({
+                amount: amount,
+                destinationBlockchainID: input.destinationBlockchainID,
+                destinationTokenTransferrerAddress: input.destinationTokenTransferrerAddress,
+                recipient: input.recipient,
+                secondaryFee: input.primaryFee,
+                secondaryGasLimit: input.requiredGasLimit,
+                multiHopFallback: DEFAULT_MULTIHOP_FALLBACK_ADDRESS
+            })
+        );
+        assertEq(
+            tokenHome.getTransferredBalance(
+                DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS
+            ),
+            0
+        );
+        assertEq(
+            tokenHome.getTransferredBalance(OTHER_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS),
+            transferAmount
+        );
+    }
+
+    function testMultiHopCallToOtherChain() public {
+        uint256 amount = 200_000;
+        _sendSingleHopSendSuccess(amount, 0);
+        _setUpRegisteredRemote(OTHER_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, 0);
+
+        uint256 feeAmount = 1;
+        uint256 transferAmount = amount - feeAmount;
+        OriginSenderInfo memory originInfo;
+        originInfo.tokenTransferrerAddress = DEFAULT_TOKEN_REMOTE_ADDRESS;
+        originInfo.senderAddress = address(this);
+        SendAndCallInput memory input = SendAndCallInput({
+            destinationBlockchainID: OTHER_BLOCKCHAIN_ID,
+            destinationTokenTransferrerAddress: DEFAULT_TOKEN_REMOTE_ADDRESS,
+            recipientContract: DEFAULT_RECIPIENT_CONTRACT_ADDRESS,
+            recipientPayload: hex"65465465",
+            requiredGasLimit: DEFAULT_REQUIRED_GAS_LIMIT,
+            recipientGasLimit: DEFAULT_RECIPIENT_GAS_LIMIT,
+            fallbackRecipient: DEFAULT_FALLBACK_RECIPIENT_ADDRESS,
+            primaryFeeTokenAddress: address(transferredToken),
+            multiHopFallback: DEFAULT_MULTIHOP_FALLBACK_ADDRESS,
+            primaryFee: feeAmount,
+            secondaryFee: 0
+        });
+        _checkExpectedTeleporterCallsForSend(
+            _createSingleHopCallTeleporterMessageInput(
+                DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, originInfo, input, transferAmount
+            )
+        );
+
+        vm.expectEmit(true, true, true, true, address(tokenHome));
+        emit TokensAndCallRouted(_MOCK_MESSAGE_ID, input, transferAmount);
+
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
@@ -685,7 +793,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
     function testRegisterRemoteZeroBlockchainID() public {
         // No messenger can be bound to the zero blockchain ID, so a registration claiming
         // to come from it is rejected before reaching the TokenHome checks.
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert("TeleporterRoutedApp: unauthorized messenger");
         tokenHome.receiveTeleporterMessage(
             bytes32(0), DEFAULT_TOKEN_REMOTE_ADDRESS, _registerRemoteMessage(0, tokenHomeDecimals)
@@ -695,7 +803,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
     function testRegisterRemoteSameChain() public {
         // No messenger can be bound to this chain's own blockchain ID either.
         bytes32 localBlockchainID = tokenHome.getBlockchainID();
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert("TeleporterRoutedApp: unauthorized messenger");
         tokenHome.receiveTeleporterMessage(
             localBlockchainID,
@@ -706,7 +814,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
 
     function testRegisterRemoteFromUnroutedChain() public {
         bytes32 unroutedBlockchainID = bytes32(uint256(1));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert("TeleporterRoutedApp: unauthorized messenger");
         tokenHome.receiveTeleporterMessage(
             unroutedBlockchainID,
@@ -716,19 +824,9 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
     }
 
     function testReceiveFromMessengerBoundToOtherChain() public {
-        // A messenger bound only to OTHER_BLOCKCHAIN_ID cannot deliver messages
+        // The messenger routed for OTHER_BLOCKCHAIN_ID cannot deliver messages
         // claiming to come from DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID.
-        address otherMessenger = address(0x1234);
-        vm.mockCall(
-            otherMessenger,
-            abi.encodeWithSignature("blockchainID()"),
-            abi.encode(DEFAULT_TOKEN_HOME_BLOCKCHAIN_ID)
-        );
-        vm.startPrank(tokenHome.owner());
-        tokenHome.addMessenger(OTHER_BLOCKCHAIN_ID, otherMessenger);
-        vm.stopPrank();
-
-        vm.prank(otherMessenger);
+        vm.prank(_messengerFor(OTHER_BLOCKCHAIN_ID));
         vm.expectRevert("TeleporterRoutedApp: unauthorized messenger");
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
@@ -739,9 +837,9 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
 
     function testReceiveFromPausedMessenger() public {
         vm.prank(tokenHome.owner());
-        tokenHome.pauseMessenger(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        tokenHome.pauseMessenger(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
 
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         vm.expectRevert("TeleporterRoutedApp: messenger paused");
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
@@ -780,7 +878,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             messageType: TransferrerMessageType.REGISTER_REMOTE,
             payload: abi.encode(payload)
         });
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID, DEFAULT_TOKEN_REMOTE_ADDRESS, abi.encode(message)
         );
@@ -878,7 +976,7 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
                 ? tokenHomeDecimals + Math.log10(tokenMultiplier)
                 : tokenHomeDecimals - Math.log10(tokenMultiplier)
         );
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(remoteBlockchainID));
         tokenHome.receiveTeleporterMessage(
             remoteBlockchainID,
             remoteTokenTransferrerAddress,
@@ -887,8 +985,8 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
     }
 
     /**
-     * @dev Binds the mock messenger to the remote chains the tests send to and receive from.
-     * Must be called once {tokenHome} has been initialized.
+     * @dev Routes each remote chain the tests send to and receive from through its own mock
+     * messenger. Must be called once {tokenHome} has been initialized.
      */
     function _routeDefaultRemoteChains() internal {
         _routeRemoteChain(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID);
@@ -898,12 +996,23 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
     function _routeRemoteChain(
         bytes32 remoteBlockchainID
     ) internal {
-        if (tokenHome.isInboundMessenger(remoteBlockchainID, MOCK_TELEPORTER_MESSENGER_ADDRESS)) {
+        address messenger = _messengerFor(remoteBlockchainID);
+        if (tokenHome.isInboundMessenger(remoteBlockchainID, messenger)) {
             return;
         }
+        vm.mockCall(
+            messenger,
+            abi.encodeCall(ITeleporterSender.blockchainID, ()),
+            abi.encode(tokenHome.getBlockchainID())
+        );
+        vm.mockCall(
+            messenger,
+            abi.encodeWithSelector(ITeleporterMessenger.sendCrossChainMessage.selector),
+            abi.encode(_MOCK_MESSAGE_ID)
+        );
         vm.startPrank(tokenHome.owner());
-        tokenHome.addMessenger(remoteBlockchainID, MOCK_TELEPORTER_MESSENGER_ADDRESS);
-        tokenHome.setOutboundMessenger(remoteBlockchainID, MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        tokenHome.addMessenger(remoteBlockchainID, messenger);
+        tokenHome.setOutboundMessenger(remoteBlockchainID, messenger);
         vm.stopPrank();
     }
 
@@ -974,6 +1083,16 @@ abstract contract TokenHomeTest is TokenTransferrerTest {
             requiredGasLimit: 0,
             multiHopFallback: DEFAULT_MULTIHOP_FALLBACK_ADDRESS
         });
+    }
+
+    /**
+     * @dev Each remote chain has its own messenger, so the tests also check that every message
+     * goes through the route of its chain, including the second hop of a multi-hop transfer.
+     */
+    function _messengerFor(
+        bytes32 blockchainID
+    ) internal pure override returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode("mock messenger", blockchainID)))));
     }
 
     function _getDefaultMessageSourceBlockchainID() internal pure override returns (bytes32) {

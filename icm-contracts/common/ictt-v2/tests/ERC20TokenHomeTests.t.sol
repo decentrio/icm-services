@@ -136,7 +136,7 @@ contract ERC20TokenHomeTest is ERC20TokenTransferrerTest, TokenHomeTest {
         // Receive an amount from remote less than `scaledAmount`
         // which will be scaled down to zero home tokens.
         vm.expectRevert(_formatErrorMessage("zero token amount"));
-        vm.prank(MOCK_TELEPORTER_MESSENGER_ADDRESS);
+        vm.prank(_messengerFor(DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID));
         tokenHome.receiveTeleporterMessage(
             DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
             DEFAULT_TOKEN_REMOTE_ADDRESS,
