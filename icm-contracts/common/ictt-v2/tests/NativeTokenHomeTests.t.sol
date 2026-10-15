@@ -29,10 +29,10 @@ contract NativeTokenHomeTest is NativeTokenTransferrerTest, TokenHomeTest {
         require(msg.sender == address(app), "NativeTokenHomeTest: invalid receive payable sender");
     }
 
-    function setUp() public override {
+    function setUp() public virtual override {
         TokenHomeTest.setUp();
 
-        wavax = new WrappedNativeToken("AVAX");
+        wavax = _newWrappedToken();
         app = new NativeTokenHomeUpgradeable(ICMInitializable.Allowed);
         app.initialize(
             DEFAULT_TOKEN_HOME_BLOCKCHAIN_ID, MOCK_TELEPORTER_MESSENGER_ADDRESS, address(wavax)
@@ -170,6 +170,14 @@ contract NativeTokenHomeTest is NativeTokenTransferrerTest, TokenHomeTest {
         uint256 amount
     ) internal override {
         app.addCollateral{value: amount}(remoteBlockchainID, remoteTokenTransferrerAddress);
+    }
+
+    /**
+     * @dev The wrapped token the home is set up with. Overridden to run this suite against other
+     * wrapped native token implementations.
+     */
+    function _newWrappedToken() internal virtual returns (IWrappedNativeToken) {
+        return new WrappedNativeToken("AVAX");
     }
 
     function _invalidInitialization(

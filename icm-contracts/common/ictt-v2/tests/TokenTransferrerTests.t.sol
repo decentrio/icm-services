@@ -148,11 +148,7 @@ abstract contract TokenTransferrerTest is Test {
             input.destinationBlockchainID, input.destinationTokenTransferrerAddress, 0
         );
         _setUpExpectedDeposit(amount, 0);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IERC20Errors.ERC20InsufficientAllowance.selector, tokenTransferrer, 0, primaryFee
-            )
-        );
+        vm.expectRevert(_insufficientAllowanceError(address(tokenTransferrer), 0, primaryFee));
         _send(input, amount);
     }
 
@@ -167,11 +163,7 @@ abstract contract TokenTransferrerTest is Test {
             input.destinationBlockchainID, input.destinationTokenTransferrerAddress, 0
         );
         _setUpExpectedDeposit(amount, 0);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IERC20Errors.ERC20InsufficientAllowance.selector, tokenTransferrer, 0, primaryFee
-            )
-        );
+        vm.expectRevert(_insufficientAllowanceError(address(tokenTransferrer), 0, primaryFee));
         _sendAndCall(input, amount);
     }
 
@@ -347,6 +339,20 @@ abstract contract TokenTransferrerTest is Test {
     function _formatErrorMessage(
         string memory message
     ) internal pure virtual returns (bytes memory);
+
+    /**
+     * @dev The revert data of a fee transfer that exceeds its allowance. Overridden for fee tokens
+     * that do not use the OpenZeppelin ERC20 errors.
+     */
+    function _insufficientAllowanceError(
+        address spender,
+        uint256 allowance,
+        uint256 needed
+    ) internal pure virtual returns (bytes memory) {
+        return abi.encodeWithSelector(
+            IERC20Errors.ERC20InsufficientAllowance.selector, spender, allowance, needed
+        );
+    }
 
     function _encodeSingleHopSendMessage(
         uint256 amount,

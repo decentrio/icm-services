@@ -279,6 +279,34 @@ contract TeleporterRoutedAppTest is Test {
         _app.receiveTeleporterMessage(_ETHEREUM_BLOCKCHAIN_ID, _ORIGIN_SENDER, hex"01");
     }
 
+    function testRetryMessageFromRemovedMessenger() public {
+        TeleporterMessengerV2 oldMessenger = _newTeleporterMessengerV2();
+        TeleporterMessengerV2 newMessenger = _newTeleporterMessengerV2();
+        _route(_ETHEREUM_BLOCKCHAIN_ID, address(oldMessenger));
+        _addMessenger(_ETHEREUM_BLOCKCHAIN_ID, address(newMessenger));
+        _setOutboundMessenger(_ETHEREUM_BLOCKCHAIN_ID, address(newMessenger));
+        vm.prank(_OWNER);
+        _app.removeMessenger(_ETHEREUM_BLOCKCHAIN_ID, address(oldMessenger));
+
+        // A message still in flight on the removed messenger fails to execute, and that messenger
+        // keeps it for a retry.
+        TeleporterMessageV2 memory message = _teleporterMessageV2(oldMessenger, hex"cafe");
+        _deliver(oldMessenger, message);
+        bytes32 messageID =
+            oldMessenger.calculateMessageID(_ETHEREUM_BLOCKCHAIN_ID, _LOCAL_BLOCKCHAIN_ID, 1);
+        assertNotEq(oldMessenger.receivedFailedMessageHashes(messageID), bytes32(0));
+        assertEq(_app.lastMessage(), "");
+
+        // The retry is delivered by the same messenger, so it fails while that messenger is removed.
+        vm.expectRevert("TeleporterMessenger: retry execution failed");
+        oldMessenger.retryMessageExecution(_ETHEREUM_BLOCKCHAIN_ID, message);
+
+        // Adding the messenger back lets the retry through.
+        _addMessenger(_ETHEREUM_BLOCKCHAIN_ID, address(oldMessenger));
+        oldMessenger.retryMessageExecution(_ETHEREUM_BLOCKCHAIN_ID, message);
+        assertEq(_app.lastMessage(), hex"cafe");
+    }
+
     /**
      * pauseMessenger / unpauseMessenger
      */
@@ -420,9 +448,7 @@ contract TeleporterRoutedAppTest is Test {
      * Integration with TeleporterMessengerV2
      */
     function testWithTeleporterMessengerV2() public {
-        TeleporterMessengerV2 messenger =
-            new TeleporterMessengerV2(address(new AcceptAllAdapter()), address(this));
-        messenger.initialize(_LOCAL_BLOCKCHAIN_ID);
+        TeleporterMessengerV2 messenger = _newTeleporterMessengerV2();
         _route(_ETHEREUM_BLOCKCHAIN_ID, address(messenger));
 
         // Sending goes through the V2 messenger.
@@ -433,26 +459,7 @@ contract TeleporterRoutedAppTest is Test {
         );
 
         // Receiving through the V2 messenger reaches the app.
-        TeleporterMessageV2 memory message = TeleporterMessageV2({
-            messageNonce: 1,
-            originSenderAddress: _ORIGIN_SENDER,
-            originTeleporterAddress: address(messenger),
-            destinationBlockchainID: _LOCAL_BLOCKCHAIN_ID,
-            destinationAddress: address(_app),
-            requiredGasLimit: 200_000,
-            allowedRelayerAddresses: new address[](0),
-            receipts: new TeleporterMessageReceipt[](0),
-            message: hex"cafe"
-        });
-        messenger.receiveCrossChainMessage(
-            TeleporterICMMessage({
-                message: message,
-                sourceNetworkID: 1,
-                sourceBlockchainID: _ETHEREUM_BLOCKCHAIN_ID,
-                attestation: new bytes(0)
-            }),
-            address(this)
-        );
+        _deliver(messenger, _teleporterMessageV2(messenger, hex"cafe"));
         assertEq(_app.lastSourceBlockchainID(), _ETHEREUM_BLOCKCHAIN_ID);
         assertEq(_app.lastOriginSenderAddress(), _ORIGIN_SENDER);
         assertEq(_app.lastMessage(), hex"cafe");
@@ -470,6 +477,13 @@ contract TeleporterRoutedAppTest is Test {
         assertEq(_app.getBlockchainID(), _LOCAL_BLOCKCHAIN_ID);
         assertEq(_app.owner(), _OWNER);
         assertEq(_app.getOutboundMessenger(_ETHEREUM_BLOCKCHAIN_ID), address(0));
+    }
+
+    function testStorageSlot() public view {
+        assertEq(
+            _erc7201StorageSlot("TeleporterRoutedApp"),
+            _app.TELEPORTER_ROUTED_APP_STORAGE_LOCATION()
+        );
     }
 
     function _addMessenger(bytes32 remoteBlockchainID, address messenger) private {
@@ -490,6 +504,56 @@ contract TeleporterRoutedAppTest is Test {
     function _receive(address messenger, bytes32 sourceBlockchainID) private {
         vm.prank(messenger);
         _app.receiveTeleporterMessage(sourceBlockchainID, _ORIGIN_SENDER, hex"01");
+    }
+
+    function _newTeleporterMessengerV2() private returns (TeleporterMessengerV2) {
+        TeleporterMessengerV2 messenger =
+            new TeleporterMessengerV2(address(new AcceptAllAdapter()), address(this));
+        messenger.initialize(_LOCAL_BLOCKCHAIN_ID);
+        return messenger;
+    }
+
+    /**
+     * @dev Delivers `message` from Ethereum through `messenger`, whose adapter accepts every message.
+     */
+    function _deliver(
+        TeleporterMessengerV2 messenger,
+        TeleporterMessageV2 memory message
+    ) private {
+        messenger.receiveCrossChainMessage(
+            TeleporterICMMessage({
+                message: message,
+                sourceNetworkID: 1,
+                sourceBlockchainID: _ETHEREUM_BLOCKCHAIN_ID,
+                attestation: new bytes(0)
+            }),
+            address(this)
+        );
+    }
+
+    function _teleporterMessageV2(
+        TeleporterMessengerV2 messenger,
+        bytes memory payload
+    ) private view returns (TeleporterMessageV2 memory) {
+        return TeleporterMessageV2({
+            messageNonce: 1,
+            originSenderAddress: _ORIGIN_SENDER,
+            originTeleporterAddress: address(messenger),
+            destinationBlockchainID: _LOCAL_BLOCKCHAIN_ID,
+            destinationAddress: address(_app),
+            requiredGasLimit: 200_000,
+            allowedRelayerAddresses: new address[](0),
+            receipts: new TeleporterMessageReceipt[](0),
+            message: payload
+        });
+    }
+
+    function _erc7201StorageSlot(
+        bytes memory storageName
+    ) private pure returns (bytes32) {
+        return keccak256(
+            abi.encode(uint256(keccak256(abi.encodePacked("teleporter.storage.", storageName))) - 1)
+        ) & ~bytes32(uint256(0xff));
     }
 
     function _messageInput(
