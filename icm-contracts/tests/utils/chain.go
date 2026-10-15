@@ -446,6 +446,25 @@ func GetEventFromLogs[T any](logs []*types.Log, parser func(log types.Log) (T, e
 	return *new(T), fmt.Errorf("failed to find %T event in receipt logs", *new(T))
 }
 
+// Returns the first log in 'logs' that 'emitter' emitted and that is successfully parsed by 'parser'.
+// Use it when contracts with the same ABI, such as two messengers, can emit into the same receipt.
+func GetEventFromLogsEmittedBy[T any](
+	logs []*types.Log,
+	emitter common.Address,
+	parser func(log types.Log) (T, error),
+) (T, error) {
+	for _, log := range logs {
+		if log.Address != emitter {
+			continue
+		}
+		event, err := parser(*log)
+		if err == nil {
+			return event, nil
+		}
+	}
+	return *new(T), fmt.Errorf("failed to find %T event emitted by %s in receipt logs", *new(T), emitter)
+}
+
 //
 // Account utils
 //
