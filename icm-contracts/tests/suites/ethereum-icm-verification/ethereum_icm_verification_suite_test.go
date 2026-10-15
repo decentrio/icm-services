@@ -72,6 +72,10 @@ func TestEthereumICMVerification(t *testing.T) {
 //  1. Deploy an ECDSAVerifier contract on every chain. Each flow below deploys and wires
 //     up whatever validator set registry and adapter it needs on top of this.
 var _ = ginkgo.BeforeSuite(func(ctx context.Context) {
+	// The ICTT v2 flow runs the relayer
+	log.Info("Building all ICM service executables")
+	utils.BuildAllExecutables(ctx, log.Root())
+
 	// Create the local network instances
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()

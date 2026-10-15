@@ -6,40 +6,39 @@ import (
 	"math/big"
 
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/utils/constants"
-	merkleregistry "github.com/ava-labs/icm-services/abi-bindings/go/MerkleValidatorSetRegistry"
 	teleportermessengerv2 "github.com/ava-labs/icm-services/abi-bindings/go/TeleporterMessengerV2"
 	erc20tokenhomev2 "github.com/ava-labs/icm-services/abi-bindings/go/ictt-v2/TokenHome/ERC20TokenHome"
 	erc20tokenremotev2 "github.com/ava-labs/icm-services/abi-bindings/go/ictt-v2/TokenRemote/ERC20TokenRemote"
 	exampleerc20 "github.com/ava-labs/icm-services/abi-bindings/go/ictt/mocks/ExampleERC20Decimals"
 	mockERC20SACR "github.com/ava-labs/icm-services/abi-bindings/go/ictt/mocks/MockERC20SendAndCallReceiver"
-	ecdsaverifier "github.com/ava-labs/icm-services/abi-bindings/go/mocks/ECDSAVerifier"
-	"github.com/ava-labs/icm-services/config"
 	localnetwork "github.com/ava-labs/icm-services/icm-contracts/tests/network"
 	testinfo "github.com/ava-labs/icm-services/icm-contracts/tests/test-info"
 	"github.com/ava-labs/icm-services/icm-contracts/tests/utils"
-	"github.com/ava-labs/icm-services/peers/clients"
-	"github.com/ava-labs/icm-services/relayer/validatorupdater"
 	"github.com/ava-labs/libevm/accounts/abi/bind"
 	"github.com/ava-labs/libevm/common"
-	"github.com/ava-labs/libevm/core/types"
 	. "github.com/onsi/gomega"
 )
 
 /**
-* Test ICTT v2 transferring an ERC20 token from an Avalanche L1 to Ethereum over TeleporterMessengerV2.
-* - Avalanche L1 -> Ethereum: signed by the L1 validator set and verified by the MerkleValidatorSetRegistry on Ethereum
-* - Ethereum -> Avalanche L1: only used to register the remote. Signed with ECDSA and verified by the mock
-*   ECDSAVerifier on the L1 until the ZK path is relayed.
+* Test ICTT v2 moving an ERC20 token between an Avalanche L1 and Ethereum over TeleporterMessengerV2.
+* - Avalanche L1 -> Ethereum: signed by the L1 validator set, delivered by the ICM relayer and verified by
+*   the MerkleValidatorSetRegistry on Ethereum
+* - Ethereum -> Avalanche L1: signed with ECDSA and verified by the mock ECDSAVerifier on the L1 until the
+*   ZK verifier is relayed
+* - C-Chain <-> Avalanche L1: Teleporter (V1) over Warp
 *
 * The test proceeds in the following steps.
-* 1. Deploy a two-way TeleporterMessengerV2 connection between the L1 and Ethereum, and register the
-*    L1 validator set on Ethereum.
+* 1. Deploy the connection between the L1 and Ethereum, register the L1 validator set on Ethereum and
+*    start the relayer.
 * 2. Deploy an ERC20TokenHome on the L1 and route Ethereum through the connection's messenger.
 * 3. Deploy an ERC20TokenRemote on Ethereum bound to the same messenger.
 * 4. Register the remote with the home (Ethereum -> L1).
 * 5. Send tokens from the L1 to Ethereum and check that the remote minted them against tokens locked in the home.
 * 6. Send tokens and call a contract on Ethereum.
+* 7. Multi-hop: send tokens from a remote on the C-Chain to Ethereum through the home, which receives
+*    them over Warp and forwards them over the connection.
+* 8. Send tokens back from Ethereum. A second messenger on the L1, whose verifier accepts the message,
+*    cannot deliver it to the home; the connection's messenger can, and the home releases the tokens.
  */
 func ICTTV2AvalancheToEthereum(
 	ctx context.Context,
@@ -51,66 +50,45 @@ func ICTTV2AvalancheToEthereum(
 	const tokenDecimals = uint8(18)
 
 	fundedAvalancheAddress, fundedAvalancheKey := avalancheNetwork.GetFundedAccountInfo()
-	fundedEthereumAddress, _ := ethereumNetwork.GetFundedAccountInfo()
+	fundedEthereumAddress, fundedEthereumKey := ethereumNetwork.GetFundedAccountInfo()
 
-	// Step 1: Deploy the two-way connection between the L1 and Ethereum
+	// Step 1: Deploy the connection between the L1 and Ethereum
 	bridge := newAvalancheEthereumBridge(
 		ctx, avalancheNetwork, ethereumNetwork, ecdsaSigner, ecdsaVerifierContractAddress,
 	)
-	defer bridge.signatureAggregator.Shutdown()
+	defer bridge.close()
 	l1Info := bridge.l1Info
 	ethInfo := bridge.ethInfo
 	ethereumBlockchainID := ethInfo.ChainID()
+	l1Opts, err := bind.NewKeyedTransactorWithChainID(fundedAvalancheKey, l1Info.EVMChainID)
+	Expect(err).Should(BeNil())
+	ethOpts, err := bind.NewKeyedTransactorWithChainID(fundedEthereumKey, ethInfo.EVMChainID)
+	Expect(err).Should(BeNil())
 
 	// Step 2: Deploy the token and its home on the L1, sending to Ethereum through the connection's messenger
 	tokenAddress, token := utils.DeployExampleERC20Decimals(ctx, fundedAvalancheKey, l1Info, tokenDecimals)
-	homeAddress, tx, home, err := erc20tokenhomev2.DeployERC20TokenHome(
-		bridge.l1Opts,
-		l1Info.EthClient,
-		l1Info.BlockchainID,
-		fundedAvalancheAddress,
-		tokenAddress,
-		tokenDecimals,
+	homeAddress, home := utils.DeployERC20TokenHomeV2(
+		ctx, fundedAvalancheKey, &l1Info, fundedAvalancheAddress, tokenAddress, tokenDecimals,
 	)
-	Expect(err).Should(BeNil())
-	utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
+	utils.AddRouteV2(ctx, fundedAvalancheKey, &l1Info, home, ethereumBlockchainID, bridge.messengerAddress)
 
-	tx, err = home.AddMessenger(bridge.l1Opts, ethereumBlockchainID, bridge.messengerAddress)
-	Expect(err).Should(BeNil())
-	utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
-	tx, err = home.SetOutboundMessenger(bridge.l1Opts, ethereumBlockchainID, bridge.messengerAddress)
-	Expect(err).Should(BeNil())
-	utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
-
-	// Step 3: Deploy the remote on Ethereum. Initialization binds the messenger to the L1.
-	remoteAddress, tx, remote, err := erc20tokenremotev2.DeployERC20TokenRemote(
-		bridge.ethOpts,
-		ethInfo.EthClient,
-		erc20tokenremotev2.TokenRemoteSettingsV2{
-			BlockchainID:          ethereumBlockchainID,
-			TeleporterMessenger:   bridge.messengerAddress,
-			TeleporterManager:     fundedEthereumAddress,
-			TokenHomeBlockchainID: l1Info.BlockchainID,
-			TokenHomeAddress:      homeAddress,
-			TokenHomeDecimals:     tokenDecimals,
-		},
-		"Wrapped Example Token",
-		"WEXT",
-		tokenDecimals,
+	// Step 3: Deploy the remote on Ethereum. Initialization routes the L1 through the same messenger.
+	remoteAddress, remote := utils.DeployERC20TokenRemoteV2(
+		ctx, fundedEthereumKey, ethInfo, bridge.messengerAddress, fundedEthereumAddress,
+		l1Info.BlockchainID, homeAddress, tokenDecimals, "Wrapped Example Token", "WEXT", tokenDecimals,
 	)
-	Expect(err).Should(BeNil())
-	utils.WaitForTransactionSuccess(ctx, ethInfo.EthClient, tx.Hash())
+	ethRemote := backedRemote{blockchainID: ethereumBlockchainID, address: remoteAddress, remote: remote}
 
 	// Step 4: Register the remote with the home
-	tx, err = remote.RegisterWithHome(
-		bridge.ethOpts,
+	tx, err := remote.RegisterWithHome(
+		ethOpts,
 		erc20tokenremotev2.TeleporterFeeInfo{FeeTokenAddress: common.Address{}, Amount: big.NewInt(0)},
 	)
 	Expect(err).Should(BeNil())
 	receipt := utils.WaitForTransactionSuccess(ctx, ethInfo.EthClient, tx.Hash())
-	receipt = bridge.relayToAvalanche(ctx, receipt)
+	receipt = bridge.toAvalanche.deliver(ctx, receipt)
 
-	registerEvent, err := utils.GetEventFromLogs(receipt.Logs, home.ParseRemoteRegistered)
+	registerEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, homeAddress, home.ParseRemoteRegistered)
 	Expect(err).Should(BeNil())
 	Expect(registerEvent.RemoteBlockchainID[:]).Should(Equal(ethereumBlockchainID[:]))
 	Expect(registerEvent.RemoteTokenTransferrerAddress).Should(Equal(remoteAddress))
@@ -120,7 +98,7 @@ func ICTTV2AvalancheToEthereum(
 	amount := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(13))
 	utils.ERC20DecimalsApprove(ctx, token, homeAddress, amount, l1Info, fundedAvalancheKey)
 	tx, err = home.Send(
-		bridge.l1Opts,
+		l1Opts,
 		erc20tokenhomev2.SendTokensInput{
 			DestinationBlockchainID:            ethereumBlockchainID,
 			DestinationTokenTransferrerAddress: remoteAddress,
@@ -135,27 +113,20 @@ func ICTTV2AvalancheToEthereum(
 	)
 	Expect(err).Should(BeNil())
 	receipt = utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
-	sendEvent, err := utils.GetEventFromLogs(receipt.Logs, home.ParseTokensSent)
+	sendEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, homeAddress, home.ParseTokensSent)
 	Expect(err).Should(BeNil())
 	utils.ExpectBigEqual(sendEvent.Amount, amount)
 
-	receipt = bridge.relayToEthereum(ctx, receipt)
-	withdrawEvent, err := utils.GetEventFromLogs(receipt.Logs, remote.ParseTokensWithdrawn)
+	receipt = bridge.toEthereum.deliver(ctx, receipt)
+	withdrawEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, remoteAddress, remote.ParseTokensWithdrawn)
 	Expect(err).Should(BeNil())
 	Expect(withdrawEvent.Recipient).Should(Equal(recipientAddress))
 	utils.ExpectBigEqual(withdrawEvent.Amount, amount)
-
-	recipientBalance, err := remote.BalanceOf(&bind.CallOpts{}, recipientAddress)
-	Expect(err).Should(BeNil())
-	utils.ExpectBigEqual(recipientBalance, amount)
-
-	// Every token minted on Ethereum is backed by a token locked in the home
-	checkBacking(home, homeAddress, token, remote, remoteAddress, ethereumBlockchainID, amount)
+	expectERC20Balance(remote, recipientAddress, amount)
+	checkBacking(home, homeAddress, token, ethRemote)
 
 	// Step 6: Send tokens and call a contract on Ethereum
-	receiverAddress, tx, receiver, err := mockERC20SACR.DeployMockERC20SendAndCallReceiver(
-		bridge.ethOpts, ethInfo.EthClient,
-	)
+	receiverAddress, tx, receiver, err := mockERC20SACR.DeployMockERC20SendAndCallReceiver(ethOpts, ethInfo.EthClient)
 	Expect(err).Should(BeNil())
 	utils.WaitForTransactionSuccess(ctx, ethInfo.EthClient, tx.Hash())
 
@@ -163,7 +134,7 @@ func ICTTV2AvalancheToEthereum(
 	payload := []byte("Hello Ethereum!")
 	utils.ERC20DecimalsApprove(ctx, token, homeAddress, callAmount, l1Info, fundedAvalancheKey)
 	tx, err = home.SendAndCall(
-		bridge.l1Opts,
+		l1Opts,
 		erc20tokenhomev2.SendAndCallInput{
 			DestinationBlockchainID:            ethereumBlockchainID,
 			DestinationTokenTransferrerAddress: remoteAddress,
@@ -182,8 +153,8 @@ func ICTTV2AvalancheToEthereum(
 	Expect(err).Should(BeNil())
 	receipt = utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
 
-	receipt = bridge.relayToEthereum(ctx, receipt)
-	receivedEvent, err := utils.GetEventFromLogs(receipt.Logs, receiver.ParseTokensReceived)
+	receipt = bridge.toEthereum.deliver(ctx, receipt)
+	receivedEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, receiverAddress, receiver.ParseTokensReceived)
 	Expect(err).Should(BeNil())
 	Expect(receivedEvent.SourceBlockchainID[:]).Should(Equal(l1Info.BlockchainID[:]))
 	Expect(receivedEvent.OriginTokenTransferrerAddress).Should(Equal(homeAddress))
@@ -191,235 +162,234 @@ func ICTTV2AvalancheToEthereum(
 	Expect(receivedEvent.Token).Should(Equal(remoteAddress))
 	utils.ExpectBigEqual(receivedEvent.Amount, callAmount)
 	Expect(receivedEvent.Payload).Should(Equal(payload))
+	expectERC20Balance(remote, receiverAddress, callAmount)
+	checkBacking(home, homeAddress, token, ethRemote)
 
-	receiverBalance, err := remote.BalanceOf(&bind.CallOpts{}, receiverAddress)
+	// Step 7: Multi-hop from a remote on the C-Chain to Ethereum through the home
+	cChainInfo := avalancheNetwork.GetPrimaryNetworkInfo()
+	cChainOpts, err := bind.NewKeyedTransactorWithChainID(fundedAvalancheKey, cChainInfo.EVMChainID)
 	Expect(err).Should(BeNil())
-	utils.ExpectBigEqual(receiverBalance, callAmount)
+	warpMessengerAddress := deployWarpMessenger(ctx, fundedAvalancheKey, cChainInfo, l1Info)
+	teleporterInfo := localnetwork.NewTeleporterTestInfo(avalancheNetwork)
+	teleporterInfo.SetTeleporter(warpMessengerAddress, cChainInfo.BlockchainID)
+	teleporterInfo.SetTeleporter(warpMessengerAddress, l1Info.BlockchainID)
+	cChainToL1 := &warpRelay{
+		teleporter:  teleporterInfo,
+		source:      cChainInfo,
+		destination: l1Info,
+		relayerKey:  fundedAvalancheKey,
+		aggregator:  bridge.signatureAggregator,
+	}
+	l1ToCChain := &warpRelay{
+		teleporter:  teleporterInfo,
+		source:      l1Info,
+		destination: cChainInfo,
+		relayerKey:  fundedAvalancheKey,
+		aggregator:  bridge.signatureAggregator,
+	}
 
-	checkBacking(
-		home, homeAddress, token, remote, remoteAddress, ethereumBlockchainID,
-		new(big.Int).Add(amount, callAmount),
+	cChainRemoteAddress, cChainRemote := utils.DeployERC20TokenRemoteV2(
+		ctx, fundedAvalancheKey, &cChainInfo, warpMessengerAddress, fundedAvalancheAddress,
+		l1Info.BlockchainID, homeAddress, tokenDecimals, "C-Chain Example Token", "CEXT", tokenDecimals,
 	)
+	cChainBackedRemote := backedRemote{
+		blockchainID: cChainInfo.BlockchainID, address: cChainRemoteAddress, remote: cChainRemote,
+	}
+	utils.AddRouteV2(ctx, fundedAvalancheKey, &l1Info, home, cChainInfo.BlockchainID, warpMessengerAddress)
+
+	tx, err = cChainRemote.RegisterWithHome(
+		cChainOpts,
+		erc20tokenremotev2.TeleporterFeeInfo{FeeTokenAddress: common.Address{}, Amount: big.NewInt(0)},
+	)
+	Expect(err).Should(BeNil())
+	receipt = utils.WaitForTransactionSuccess(ctx, cChainInfo.EthClient, tx.Hash())
+	receipt = cChainToL1.deliver(ctx, receipt)
+	_, err = utils.GetEventFromLogsEmittedBy(receipt.Logs, homeAddress, home.ParseRemoteRegistered)
+	Expect(err).Should(BeNil())
+
+	cChainAmount := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(5))
+	utils.ERC20DecimalsApprove(ctx, token, homeAddress, cChainAmount, l1Info, fundedAvalancheKey)
+	tx, err = home.Send(
+		l1Opts,
+		erc20tokenhomev2.SendTokensInput{
+			DestinationBlockchainID:            cChainInfo.BlockchainID,
+			DestinationTokenTransferrerAddress: cChainRemoteAddress,
+			Recipient:                          fundedAvalancheAddress,
+			PrimaryFeeTokenAddress:             tokenAddress,
+			PrimaryFee:                         big.NewInt(0),
+			SecondaryFee:                       big.NewInt(0),
+			RequiredGasLimit:                   utils.DefaultERC20RequiredGas,
+			MultiHopFallback:                   common.Address{},
+		},
+		cChainAmount,
+	)
+	Expect(err).Should(BeNil())
+	receipt = utils.WaitForTransactionSuccess(ctx, l1Info.EthClient, tx.Hash())
+	l1ToCChain.deliver(ctx, receipt)
+	expectERC20Balance(cChainRemote, fundedAvalancheAddress, cChainAmount)
+
+	hopAmount := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(2))
+	tx, err = cChainRemote.Approve(cChainOpts, cChainRemoteAddress, hopAmount)
+	Expect(err).Should(BeNil())
+	utils.WaitForTransactionSuccess(ctx, cChainInfo.EthClient, tx.Hash())
+	tx, err = cChainRemote.Send(
+		cChainOpts,
+		erc20tokenremotev2.SendTokensInput{
+			DestinationBlockchainID:            ethereumBlockchainID,
+			DestinationTokenTransferrerAddress: remoteAddress,
+			Recipient:                          fundedEthereumAddress,
+			PrimaryFeeTokenAddress:             cChainRemoteAddress,
+			PrimaryFee:                         big.NewInt(0),
+			SecondaryFee:                       big.NewInt(0),
+			RequiredGasLimit:                   utils.DefaultERC20RequiredGas,
+			MultiHopFallback:                   fundedAvalancheAddress,
+		},
+		hopAmount,
+	)
+	Expect(err).Should(BeNil())
+	receipt = utils.WaitForTransactionSuccess(ctx, cChainInfo.EthClient, tx.Hash())
+
+	// The home receives the first hop over Warp and forwards it over the connection's messenger
+	receipt = cChainToL1.deliver(ctx, receipt)
+	routedEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, homeAddress, home.ParseTokensRouted)
+	Expect(err).Should(BeNil())
+	utils.ExpectBigEqual(routedEvent.Amount, hopAmount)
+
+	receipt = bridge.toEthereum.deliver(ctx, receipt)
+	withdrawEvent, err = utils.GetEventFromLogsEmittedBy(receipt.Logs, remoteAddress, remote.ParseTokensWithdrawn)
+	Expect(err).Should(BeNil())
+	Expect(withdrawEvent.Recipient).Should(Equal(fundedEthereumAddress))
+	utils.ExpectBigEqual(withdrawEvent.Amount, hopAmount)
+	expectERC20Balance(remote, fundedEthereumAddress, hopAmount)
+	expectERC20Balance(cChainRemote, fundedAvalancheAddress, new(big.Int).Sub(cChainAmount, hopAmount))
+	checkBacking(home, homeAddress, token, ethRemote, cChainBackedRemote)
+
+	// Step 8: Send tokens back from Ethereum
+	backRecipientAddress := common.HexToAddress("0x5EAd0000000000000000000000000000000BaCcC")
+	backAmount := big.NewInt(1e18)
+	tx, err = remote.Approve(ethOpts, remoteAddress, backAmount)
+	Expect(err).Should(BeNil())
+	utils.WaitForTransactionSuccess(ctx, ethInfo.EthClient, tx.Hash())
+	tx, err = remote.Send(
+		ethOpts,
+		erc20tokenremotev2.SendTokensInput{
+			DestinationBlockchainID:            l1Info.BlockchainID,
+			DestinationTokenTransferrerAddress: homeAddress,
+			Recipient:                          backRecipientAddress,
+			PrimaryFeeTokenAddress:             remoteAddress,
+			PrimaryFee:                         big.NewInt(0),
+			SecondaryFee:                       big.NewInt(0),
+			RequiredGasLimit:                   utils.DefaultERC20RequiredGas,
+			MultiHopFallback:                   common.Address{},
+		},
+		backAmount,
+	)
+	Expect(err).Should(BeNil())
+	sendBackReceipt := utils.WaitForTransactionSuccess(ctx, ethInfo.EthClient, tx.Hash())
+	lockedBefore, err := token.BalanceOf(&bind.CallOpts{}, homeAddress)
+	Expect(err).Should(BeNil())
+
+	// A second bridge messenger on the L1 verifies the message, but the home's route for Ethereum does
+	// not include it, so the home rejects the delivery and the message fails to execute.
+	secondMessengerAddress, secondMessenger := deploySecondMessenger(
+		ctx, fundedAvalancheKey, l1Info, ethereumBlockchainID, ecdsaVerifierContractAddress,
+	)
+	sent := bridge.toAvalanche.sentMessage(sendBackReceipt)
+	sent.OriginTeleporterAddress = secondMessengerAddress
+	receipt = submitMessage(ctx, &l1Info, fundedAvalancheKey, secondMessenger, bridge.toAvalanche.attester.attest(sent))
+	failedEvent, err := utils.GetEventFromLogsEmittedBy(
+		receipt.Logs, secondMessengerAddress, secondMessenger.ParseMessageExecutionFailed,
+	)
+	Expect(err).Should(BeNil(), "the home accepted a message from a messenger outside its route")
+	Expect(failedEvent.Message.DestinationAddress).Should(Equal(homeAddress))
+	expectERC20Balance(token, homeAddress, lockedBefore)
+	expectERC20Balance(token, backRecipientAddress, big.NewInt(0))
+
+	// The connection's messenger delivers the same message, and the home releases the tokens
+	receipt = bridge.toAvalanche.deliver(ctx, sendBackReceipt)
+	homeWithdrawEvent, err := utils.GetEventFromLogsEmittedBy(receipt.Logs, homeAddress, home.ParseTokensWithdrawn)
+	Expect(err).Should(BeNil())
+	Expect(homeWithdrawEvent.Recipient).Should(Equal(backRecipientAddress))
+	utils.ExpectBigEqual(homeWithdrawEvent.Amount, backAmount)
+	expectERC20Balance(token, backRecipientAddress, backAmount)
+	checkBacking(home, homeAddress, token, ethRemote, cChainBackedRemote)
 }
 
-// checkBacking checks that the remote's total supply on Ethereum equals both the tokens the home
-// recorded as sent to it and the tokens the home holds. The token uses the same decimals on both
-// chains, so no scaling applies.
+// backedRemote is a remote of the home, with the chain it is on.
+type backedRemote struct {
+	blockchainID ids.ID
+	address      common.Address
+	remote       *erc20tokenremotev2.ERC20TokenRemote
+}
+
+// checkBacking checks the backing rule: each remote's total supply equals the tokens the home recorded
+// as sent to it, and the home holds exactly their sum. The token uses the same decimals on every chain,
+// so no scaling applies.
 func checkBacking(
 	home *erc20tokenhomev2.ERC20TokenHome,
 	homeAddress common.Address,
 	token *exampleerc20.ExampleERC20Decimals,
-	remote *erc20tokenremotev2.ERC20TokenRemote,
-	remoteAddress common.Address,
-	ethereumBlockchainID ids.ID,
-	expected *big.Int,
+	remotes ...backedRemote,
 ) {
-	totalSupply, err := remote.TotalSupply(&bind.CallOpts{})
-	Expect(err).Should(BeNil())
-	utils.ExpectBigEqual(totalSupply, expected)
-
-	transferredBalance, err := home.GetTransferredBalance(&bind.CallOpts{}, ethereumBlockchainID, remoteAddress)
-	Expect(err).Should(BeNil())
-	utils.ExpectBigEqual(transferredBalance, expected)
-
-	lockedBalance, err := token.BalanceOf(&bind.CallOpts{}, homeAddress)
-	Expect(err).Should(BeNil())
-	utils.ExpectBigEqual(lockedBalance, expected)
+	locked := big.NewInt(0)
+	for _, r := range remotes {
+		totalSupply, err := r.remote.TotalSupply(&bind.CallOpts{})
+		Expect(err).Should(BeNil())
+		transferredBalance, err := home.GetTransferredBalance(&bind.CallOpts{}, r.blockchainID, r.address)
+		Expect(err).Should(BeNil())
+		utils.ExpectBigEqual(totalSupply, transferredBalance)
+		locked.Add(locked, transferredBalance)
+	}
+	expectERC20Balance(token, homeAddress, locked)
 }
 
-// avalancheEthereumBridge is a two-way TeleporterMessengerV2 connection between an Avalanche L1 and
-// Ethereum, with the messenger at the same address on both chains.
-// - Avalanche L1 -> Ethereum: Warp, verified by the MerkleValidatorSetRegistry on Ethereum
-// - Ethereum -> Avalanche L1: verified by the mock ECDSAVerifier on the L1
-type avalancheEthereumBridge struct {
-	l1Info               testinfo.L1TestInfo
-	ethInfo              *testinfo.EthereumTestInfo
-	networkID            uint32
-	messengerAddress     common.Address
-	l1Messenger          *teleportermessengerv2.TeleporterMessengerV2
-	ethMessenger         *teleportermessengerv2.TeleporterMessengerV2
-	l1Opts               *bind.TransactOpts
-	ethOpts              *bind.TransactOpts
-	signatureAggregator  *utils.SignatureAggregator
-	pChainClient         *clients.CanonicalValidatorClient
-	registeredHeight     uint64
-	ecdsaSigner          *ecdsa.PrivateKey
-	ecdsaVerifierAddress common.Address
+type erc20 interface {
+	BalanceOf(opts *bind.CallOpts, account common.Address) (*big.Int, error)
 }
 
-// newAvalancheEthereumBridge deploys the registry, adapter and messenger on both chains and registers
-// the L1 validator set on Ethereum. The caller must shut down the returned signature aggregator.
-func newAvalancheEthereumBridge(
+func expectERC20Balance(token erc20, account common.Address, expected *big.Int) {
+	balance, err := token.BalanceOf(&bind.CallOpts{}, account)
+	Expect(err).Should(BeNil())
+	utils.ExpectBigEqual(balance, expected)
+}
+
+// deployWarpMessenger deploys the Teleporter (V1) messenger on [chains] with Nick's method, skipping any
+// chain that already has it, and returns its address.
+func deployWarpMessenger(
 	ctx context.Context,
-	avalancheNetwork *localnetwork.LocalAvalancheNetwork,
-	ethereumNetwork *localnetwork.LocalEthereumNetwork,
-	ecdsaSigner *ecdsa.PrivateKey,
-	ecdsaVerifierContractAddress common.Address,
-) *avalancheEthereumBridge {
-	l1Info := avalancheNetwork.GetL1Infos()[0]
-	primaryNetworkInfo := avalancheNetwork.GetPrimaryNetworkInfo()
-	ethInfo := ethereumNetwork.EthereumTestInfo()
-	networkID := avalancheNetwork.GetNetworkID()
-	_, ethFundedKey := ethereumNetwork.GetFundedAccountInfo()
-	fundedAvalancheAddress, fundedAvalancheKey := avalancheNetwork.GetFundedAccountInfo()
-	ethereumOpts, err := bind.NewKeyedTransactorWithChainID(ethFundedKey, ethereumNetwork.ChainID)
-	Expect(err).Should(BeNil())
-	avalancheOpts, err := bind.NewKeyedTransactorWithChainID(fundedAvalancheKey, l1Info.EVMChainID)
-	Expect(err).Should(BeNil())
-
-	pChainClient := clients.NewCanonicalValidatorClient(&config.APIConfig{
-		BaseURL: primaryNetworkInfo.NodeURIs[0],
-	})
-	pChainHeight, err := pChainClient.GetLatestHeight(ctx)
-	Expect(err).Should(BeNil())
-	pChainTimestamp, err := pChainClient.GetBlockTimestampAtHeight(ctx, pChainHeight)
-	Expect(err).Should(BeNil())
-	pChainWarpSet, err := pChainClient.GetProposedValidators(ctx, ids.Empty)
-	Expect(err).Should(BeNil())
-
-	pChainValidators := make([]*validatorupdater.Validator, len(pChainWarpSet.Validators))
-	for i, val := range pChainWarpSet.Validators {
-		pChainValidators[i] = &validatorupdater.Validator{
-			UncompressedPublicKeyBytes: [96]byte(val.PublicKey.Serialize()),
-			Weight:                     val.Weight,
+	fundedKey *ecdsa.PrivateKey,
+	chains ...testinfo.L1TestInfo,
+) common.Address {
+	messengerAddress, deployerAddress, _ := utils.TeleporterDeploymentValues()
+	deployerTransaction := utils.TeleporterDeployerTransaction()
+	for _, chain := range chains {
+		code, err := chain.EthClient.CodeAt(ctx, messengerAddress, nil)
+		Expect(err).Should(BeNil())
+		if len(code) > 0 {
+			continue
 		}
+		utils.DeployWithNicksMethod(ctx, &chain, deployerTransaction, deployerAddress, messengerAddress, fundedKey)
 	}
-	utils.SortValidators(pChainValidators)
-	pChainRoot := validatorupdater.BuildMerkleRoot(pChainValidators)
-	var pChainTotalWeight uint64
-	for _, v := range pChainValidators {
-		pChainTotalWeight += v.Weight
-	}
-
-	// Registries are deployed with Nick's method, so a registry with the same constructor arguments as
-	// one deployed by another test in this suite would collide with it. Allowing the P-Chain fallback
-	// gives this connection its own registry, adapter and messenger addresses.
-	merkleRegistryAddr := utils.DeployMerkleValidatorSetRegistry(
-		ctx, ethInfo, ethFundedKey, networkID, constants.PlatformChainID,
-		pChainRoot, pChainTotalWeight, pChainHeight, pChainTimestamp, true,
-	)
-	merkleRegistryAddrL1 := utils.DeployMerkleValidatorSetRegistry(
-		ctx, &l1Info, fundedAvalancheKey, networkID, constants.PlatformChainID,
-		pChainRoot, pChainTotalWeight, pChainHeight, pChainTimestamp, true,
-	)
-	Expect(merkleRegistryAddrL1).Should(Equal(merkleRegistryAddr))
-	merkleRegistry, err := merkleregistry.NewMerkleValidatorSetRegistry(merkleRegistryAddr, ethereumNetwork.EthClient)
-	Expect(err).Should(BeNil())
-
-	adapterAddr := utils.DeployAdapter(
-		ctx, ethInfo, l1Info.BlockchainID, ethInfo.ChainID(),
-		ecdsaVerifierContractAddress, merkleRegistryAddr, ethFundedKey,
-	)
-	adapterAddrL1 := utils.DeployAdapter(
-		ctx, &l1Info, l1Info.BlockchainID, ethInfo.ChainID(),
-		ecdsaVerifierContractAddress, merkleRegistryAddr, fundedAvalancheKey,
-	)
-	Expect(adapterAddrL1).Should(Equal(adapterAddr))
-
-	// The same initializer key must be used on both chains for the messengers to share an address.
-	// Fund it on Ethereum so it can send the initialize transaction there.
-	ethereumNetwork.FundAccount(ctx, fundedAvalancheAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(10)))
-	l1MessengerAddr := utils.DeployTeleporterV2(ctx, &l1Info, adapterAddr, fundedAvalancheKey, fundedAvalancheKey)
-	ethMessengerAddr := utils.DeployTeleporterV2(ctx, ethInfo, adapterAddr, ethFundedKey, fundedAvalancheKey)
-	Expect(l1MessengerAddr).Should(Equal(ethMessengerAddr))
-
-	l1Messenger, err := teleportermessengerv2.NewTeleporterMessengerV2(l1MessengerAddr, l1Info.EthClient)
-	Expect(err).Should(BeNil())
-	ethMessenger, err := teleportermessengerv2.NewTeleporterMessengerV2(ethMessengerAddr, ethInfo.EthClient)
-	Expect(err).Should(BeNil())
-
-	signatureAggregator := avalancheNetwork.GetSignatureAggregator()
-	registeredHeight := registerL1ValidatorSet(
-		ctx, pChainClient, pChainValidators, signatureAggregator,
-		networkID, l1Info, merkleRegistry, ethereumOpts, ethereumNetwork.EthClient,
-	)
-
-	return &avalancheEthereumBridge{
-		l1Info:               l1Info,
-		ethInfo:              ethInfo,
-		networkID:            networkID,
-		messengerAddress:     l1MessengerAddr,
-		l1Messenger:          l1Messenger,
-		ethMessenger:         ethMessenger,
-		l1Opts:               avalancheOpts,
-		ethOpts:              ethereumOpts,
-		signatureAggregator:  signatureAggregator,
-		pChainClient:         pChainClient,
-		registeredHeight:     registeredHeight,
-		ecdsaSigner:          ecdsaSigner,
-		ecdsaVerifierAddress: ecdsaVerifierContractAddress,
-	}
+	return messengerAddress
 }
 
-// relayToEthereum delivers the message sent by the L1 messenger in [sourceReceipt] to Ethereum. The message
-// is attested by the L1 validators' aggregate BLS signature and a Merkle proof of the signers against the
-// commitment registered on Ethereum. Returns the delivery receipt after checking that the message executed.
-func (b *avalancheEthereumBridge) relayToEthereum(ctx context.Context, sourceReceipt *types.Receipt) *types.Receipt {
-	sendEvent, err := utils.GetEventFromLogs(sourceReceipt.Logs, b.l1Messenger.ParseSendCrossChainMessage)
-	Expect(err).Should(BeNil())
-
-	attestation := signMessageAvalancheMerkle(
-		ctx, sourceReceipt, b.l1Info, b.signatureAggregator, b.pChainClient, b.registeredHeight,
+// deploySecondMessenger deploys another TeleporterMessengerV2 on the L1, with its own adapter that
+// accepts messages from Ethereum signed for the mock ECDSAVerifier, as the connection's adapter does.
+func deploySecondMessenger(
+	ctx context.Context,
+	fundedKey *ecdsa.PrivateKey,
+	l1Info testinfo.L1TestInfo,
+	ethereumBlockchainID ids.ID,
+	ecdsaVerifierAddress common.Address,
+) (common.Address, *teleportermessengerv2.TeleporterMessengerV2) {
+	// The adapter's address follows from its constructor arguments. Its Ethereum-bound side is never
+	// used, and a placeholder there keeps it apart from the connection's adapter.
+	adapterAddress := utils.DeployAdapter(
+		ctx, &l1Info, l1Info.BlockchainID, ethereumBlockchainID, ecdsaVerifierAddress,
+		common.HexToAddress("0x000000000000000000000000000000000000dEaD"), fundedKey,
 	)
-	tx, err := b.ethMessenger.ReceiveCrossChainMessage(
-		b.ethOpts,
-		teleportermessengerv2.TeleporterICMMessage{
-			Message:            sendEvent.Message,
-			SourceNetworkID:    b.networkID,
-			SourceBlockchainID: b.l1Info.BlockchainID,
-			Attestation:        attestation,
-		},
-		common.Address{},
-	)
+	messengerAddress := utils.DeployTeleporterV2(ctx, &l1Info, adapterAddress, fundedKey, fundedKey)
+	messenger, err := teleportermessengerv2.NewTeleporterMessengerV2(messengerAddress, l1Info.EthClient)
 	Expect(err).Should(BeNil())
-	receipt := utils.WaitForTransactionSuccess(ctx, b.ethInfo.EthClient, tx.Hash())
-
-	_, err = utils.GetEventFromLogs(receipt.Logs, b.ethMessenger.ParseMessageExecuted)
-	Expect(err).Should(BeNil(), "message was delivered to Ethereum but did not execute")
-	return receipt
-}
-
-// relayToAvalanche delivers the message sent through the ECDSAVerifier on Ethereum in [sourceReceipt] to
-// the L1, signing it with the trusted ECDSA key. Returns the delivery receipt after checking that the
-// message executed.
-func (b *avalancheEthereumBridge) relayToAvalanche(ctx context.Context, sourceReceipt *types.Receipt) *types.Receipt {
-	ecdsaVerifier, err := ecdsaverifier.NewECDSAVerifier(b.ecdsaVerifierAddress, b.ethInfo.EthClient)
-	Expect(err).Should(BeNil())
-	sendEvent, err := utils.GetEventFromLogs(sourceReceipt.Logs, ecdsaVerifier.ParseECDSAVerifierSendMessage)
-	Expect(err).Should(BeNil())
-
-	sent := sendEvent.Message
-	receipts := make([]teleportermessengerv2.TeleporterMessageReceipt, len(sent.Receipts))
-	for i, r := range sent.Receipts {
-		receipts[i] = teleportermessengerv2.TeleporterMessageReceipt{
-			ReceivedMessageNonce: r.ReceivedMessageNonce,
-			RelayerRewardAddress: r.RelayerRewardAddress,
-		}
-	}
-	tx, err := b.l1Messenger.ReceiveCrossChainMessage(
-		b.l1Opts,
-		teleportermessengerv2.TeleporterICMMessage{
-			Message: teleportermessengerv2.TeleporterMessageV2{
-				MessageNonce:            sent.MessageNonce,
-				OriginSenderAddress:     sent.OriginSenderAddress,
-				OriginTeleporterAddress: sent.OriginTeleporterAddress,
-				DestinationBlockchainID: sent.DestinationBlockchainID,
-				DestinationAddress:      sent.DestinationAddress,
-				RequiredGasLimit:        sent.RequiredGasLimit,
-				AllowedRelayerAddresses: sent.AllowedRelayerAddresses,
-				Receipts:                receipts,
-				Message:                 sent.Message,
-			},
-			SourceNetworkID:    0,
-			SourceBlockchainID: b.ethInfo.ChainID(),
-			Attestation:        signMessageEcdsa(sent, b.ethInfo.ChainID(), b.ecdsaVerifierAddress, b.ecdsaSigner),
-		},
-		common.Address{},
-	)
-	Expect(err).Should(BeNil())
-	receipt := utils.WaitForTransactionSuccess(ctx, b.l1Info.EthClient, tx.Hash())
-
-	_, err = utils.GetEventFromLogs(receipt.Logs, b.l1Messenger.ParseMessageExecuted)
-	Expect(err).Should(BeNil(), "message was delivered to the L1 but did not execute")
-	return receipt
+	return messengerAddress, messenger
 }
