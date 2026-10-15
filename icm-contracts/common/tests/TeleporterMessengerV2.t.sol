@@ -33,6 +33,23 @@ contract AcceptAllAdapter is IAdapter {
     }
 }
 
+/// @dev Receiver that rejects messages until it is opened, so a delivery can fail and be retried.
+contract GatedReceiver {
+    bool public open;
+    bytes public lastMessage;
+
+    function setOpen(
+        bool open_
+    ) external {
+        open = open_;
+    }
+
+    function receiveTeleporterMessage(bytes32, address, bytes calldata message) external {
+        require(open, "GatedReceiver: closed");
+        lastMessage = message;
+    }
+}
+
 contract TeleporterMessengerV2InitializeTest is Test {
     bytes32 private constant _BLOCKCHAIN_ID = hex"01";
     bytes32 private constant _OTHER_BLOCKCHAIN_ID = hex"02";
@@ -175,5 +192,76 @@ contract TeleporterMessengerV2InitializeTest is Test {
             allowedRelayerAddresses: new address[](0),
             message: hex"deadbeef"
         });
+    }
+}
+
+contract TeleporterMessengerV2RetryTest is Test {
+    bytes32 private constant _BLOCKCHAIN_ID = hex"01";
+    bytes32 private constant _SOURCE_BLOCKCHAIN_ID = hex"02";
+
+    TeleporterMessengerV2 private _teleporter;
+    GatedReceiver private _receiver;
+
+    function setUp() public {
+        _teleporter = new TeleporterMessengerV2(address(new AcceptAllAdapter()), address(this));
+        _teleporter.initialize(_BLOCKCHAIN_ID);
+        _receiver = new GatedReceiver();
+    }
+
+    function testRetryFailedMessage() public {
+        TeleporterMessageV2 memory message = _deliverFailingMessage();
+
+        _receiver.setOpen(true);
+        _teleporter.retryMessageExecution(_SOURCE_BLOCKCHAIN_ID, message);
+        assertEq(_receiver.lastMessage(), hex"deadbeef");
+        assertEq(_teleporter.receivedFailedMessageHashes(_messageID()), bytes32(0));
+
+        vm.expectRevert("TeleporterMessenger: message not found");
+        _teleporter.retryMessageExecution(_SOURCE_BLOCKCHAIN_ID, message);
+    }
+
+    function testRetryFailedMessageStillFailing() public {
+        TeleporterMessageV2 memory message = _deliverFailingMessage();
+
+        vm.expectRevert("TeleporterMessenger: retry execution failed");
+        _teleporter.retryMessageExecution(_SOURCE_BLOCKCHAIN_ID, message);
+        assertNotEq(_teleporter.receivedFailedMessageHashes(_messageID()), bytes32(0));
+    }
+
+    function testRetryRejectsAlteredMessage() public {
+        TeleporterMessageV2 memory message = _deliverFailingMessage();
+        _receiver.setOpen(true);
+
+        message.message = hex"0bad";
+        vm.expectRevert("TeleporterMessenger: invalid message hash");
+        _teleporter.retryMessageExecution(_SOURCE_BLOCKCHAIN_ID, message);
+    }
+
+    function _deliverFailingMessage() private returns (TeleporterMessageV2 memory message) {
+        message = TeleporterMessageV2({
+            messageNonce: 1,
+            originSenderAddress: address(this),
+            originTeleporterAddress: address(_teleporter),
+            destinationBlockchainID: _BLOCKCHAIN_ID,
+            destinationAddress: address(_receiver),
+            requiredGasLimit: 100_000,
+            allowedRelayerAddresses: new address[](0),
+            receipts: new TeleporterMessageReceipt[](0),
+            message: hex"deadbeef"
+        });
+        _teleporter.receiveCrossChainMessage(
+            TeleporterICMMessage({
+                message: message,
+                sourceNetworkID: 1,
+                sourceBlockchainID: _SOURCE_BLOCKCHAIN_ID,
+                attestation: hex""
+            }),
+            address(0)
+        );
+        assertNotEq(_teleporter.receivedFailedMessageHashes(_messageID()), bytes32(0));
+    }
+
+    function _messageID() private view returns (bytes32) {
+        return _teleporter.calculateMessageID(_SOURCE_BLOCKCHAIN_ID, _BLOCKCHAIN_ID, 1);
     }
 }

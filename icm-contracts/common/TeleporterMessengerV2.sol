@@ -291,19 +291,7 @@ contract TeleporterMessengerV2 is ITeleporterMessengerV2, ReentrancyGuards, Init
             "TeleporterMessengerV2: invalid origin teleporter address"
         );
 
-        // We need to copy this to memory
-        TeleporterMessageReceipt[] memory receipts = teleporterMessageV2.receipts;
-
-        TeleporterMessage memory teleporterMessage = TeleporterMessage({
-            messageNonce: teleporterMessageV2.messageNonce,
-            originSenderAddress: teleporterMessageV2.originSenderAddress,
-            destinationBlockchainID: teleporterMessageV2.destinationBlockchainID,
-            destinationAddress: teleporterMessageV2.destinationAddress,
-            requiredGasLimit: teleporterMessageV2.requiredGasLimit,
-            allowedRelayerAddresses: teleporterMessageV2.allowedRelayerAddresses,
-            receipts: receipts,
-            message: teleporterMessageV2.message
-        });
+        TeleporterMessage memory teleporterMessage = _toTeleporterMessage(teleporterMessageV2);
 
         // Require that the message was intended for this blockchain. The blockchain ID must have
         // been initialized, otherwise a message destined for the zero blockchain ID would be accepted.
@@ -391,10 +379,12 @@ contract TeleporterMessengerV2 is ITeleporterMessengerV2, ReentrancyGuards, Init
             calculateMessageID(sourceBlockchainID, blockchainID, message.messageNonce);
 
         // Check that the hash of the payload provided matches the hash of the payload that previously failed to execute.
+        // Failed messages are stored in the form emitted by {MessageExecutionFailed}, which has no
+        // `originTeleporterAddress`, so the message is converted to that form before hashing.
         bytes32 failedMessageHash = receivedFailedMessageHashes[messageID];
         require(failedMessageHash != bytes32(0), "TeleporterMessenger: message not found");
         require(
-            keccak256(abi.encode(message)) == failedMessageHash,
+            keccak256(abi.encode(_toTeleporterMessage(message))) == failedMessageHash,
             "TeleporterMessenger: invalid message hash"
         );
 
@@ -876,5 +866,28 @@ contract TeleporterMessengerV2 is ITeleporterMessengerV2, ReentrancyGuards, Init
         bytes32 messageID
     ) private view returns (bool) {
         return _receivedMessageNonces[messageID] != 0;
+    }
+
+    /**
+     * @dev Converts a received message to the form that is executed, stored on failure, and emitted
+     * by {MessageExecutionFailed}. Receiving and retrying must both use this, so that a retried
+     * message hashes to what was stored when it failed.
+     */
+    function _toTeleporterMessage(
+        TeleporterMessageV2 calldata message
+    ) private pure returns (TeleporterMessage memory) {
+        // We need to copy this to memory
+        TeleporterMessageReceipt[] memory receipts = message.receipts;
+
+        return TeleporterMessage({
+            messageNonce: message.messageNonce,
+            originSenderAddress: message.originSenderAddress,
+            destinationBlockchainID: message.destinationBlockchainID,
+            destinationAddress: message.destinationAddress,
+            requiredGasLimit: message.requiredGasLimit,
+            allowedRelayerAddresses: message.allowedRelayerAddresses,
+            receipts: receipts,
+            message: message.message
+        });
     }
 }
