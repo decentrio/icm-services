@@ -10,3 +10,7 @@ The goal of external interoperability is to provide solutions for sending messag
   - [Relayer Changes](origin_avalanche/relayer_changes.md)
 - Applications
   - [ICTT v2 over TeleporterMessengerV2](ictt_v2.md)
+- [Glossary](CONTEXT.md)
+- Decisions
+  - [ADR-0001: routes instead of TeleporterRegistry](adr/0001-routes-instead-of-teleporter-registry.md)
+  - [ADR-0002: ICTT v2 copies v1's token logic](adr/0002-ictt-v2-copies-v1-token-logic.md)

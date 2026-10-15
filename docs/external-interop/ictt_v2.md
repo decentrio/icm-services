@@ -4,6 +4,8 @@ Status: Draft. Scope: MVP, bidirectional.
 
 Related: [Teleporter V2 contracts](teleporter_contracts.md), [Message Authentication](icm_message_authentication.md), [Validator set registry](origin_avalanche/validator_set_registry.md), [ZK state verifier](origin_ethereum/zk_state_verifier.md)
 
+Terms used here are defined in the [glossary](CONTEXT.md). Decisions: [ADR-0001](adr/0001-routes-instead-of-teleporter-registry.md), [ADR-0002](adr/0002-ictt-v2-copies-v1-token-logic.md).
+
 ## 1. Purpose
 
 ICM now has a new bridge that connects Avalanche chains with Ethereum. It is built on `TeleporterMessengerV2` and carries messages in both directions:
@@ -89,7 +91,7 @@ Three layers:
 
 - **ICTT (TokenHome / TokenRemote).** Moves the tokens: lock, mint, burn, release. ICTT v2 changes this layer.
 - **TeleporterMessengerV2.** Delivers each message once and in order. Its interface towards applications is the same as Teleporter V1.
-- **Adapter and verifiers.** Sends and verifies messages for each direction. The messenger and its adapters are deployed at the same address on both chains, and each Avalanche chain ↔ Ethereum connection has its own messenger.
+- **Adapter and verifiers.** Sends and verifies messages for each direction. The messenger and its adapters are deployed at the same address on both chains, and each connection (one Avalanche chain ↔ Ethereum) has its own bridge messenger.
 
 A relayer carries messages between the chains. It also keeps the validator-set registry on Ethereum and the ZK light client on Avalanche up to date.
 
@@ -98,7 +100,7 @@ A relayer carries messages between the chains. It also keeps the validator-set r
 ICTT v1 is tied to Avalanche and Teleporter V1 in three places:
 
 - **Finding its messenger.** ICTT v1 gets its messenger from `TeleporterRegistry`. The registry is managed through Warp, which only exists on Avalanche, so it cannot be deployed on Ethereum. On Ethereum, ICTT would have no way to find the bridge messenger.
-- **Knowing its own chain ID.** ICTT v1 reads its chain ID from the Warp precompile. That precompile does not exist on Ethereum, so deployment fails.
+- **Knowing its own blockchain ID.** ICTT v1 reads its blockchain ID from the Warp precompile. That precompile does not exist on Ethereum, so deployment fails.
 - **Trusting messengers.** The registry trusts every registered messenger for every chain. Once the bridge messenger (Avalanche ↔ Ethereum) and the Warp messenger (Avalanche ↔ Avalanche) run on the same chain, each would be trusted for the other's traffic. That is unsafe.
 
 `NativeTokenRemote` is also tied to Avalanche: it mints the chain's native coin through an Avalanche precompile, so it cannot run on Ethereum.
@@ -107,25 +109,28 @@ ICTT v1 is tied to Avalanche and Teleporter V1 in three places:
 
 ## 5. What ICTT v2 changes
 
-### 5.1 One messenger per chain instead of a registry
+### 5.1 A route per counterparty chain instead of a registry
 
-ICTT v2 removes `TeleporterRegistry`. Instead, each ICTT contract keeps a small table of which messenger to use for each counterparty chain.
+ICTT v2 removes `TeleporterRegistry`. Instead, each ICTT contract keeps a **route** for each counterparty chain: the messenger it sends through (the **outbound messenger**) and the messengers it accepts messages from (the **inbound messengers**). See [ADR-0001](adr/0001-routes-instead-of-teleporter-registry.md).
 
-- **Sending to chain X** uses the messenger configured for X. For Ethereum this is the bridge messenger; for an Avalanche L1 it is the Warp messenger.
-- **Receiving from chain X** is accepted only from the messenger configured for X. No other messenger can pretend to deliver messages from Ethereum.
-- **Pausing.** Any messenger can be paused in an emergency.
+- **Sending to chain X** uses the outbound messenger of X's route. For Ethereum this is the bridge messenger; for an Avalanche L1 it is the Warp messenger.
+- **Receiving from chain X** is accepted only from an inbound messenger of X's route. No other messenger can pretend to deliver messages from Ethereum. A route normally has one inbound messenger, which is also its outbound messenger. It has two only while a messenger is being replaced.
+- **Pausing.** Pausing a messenger stops sending and receiving through it on every route that uses it. There is no way yet to cut off one chain whose messenger other chains also use (Q6).
 - **Replacing a messenger,** for example after a bridge upgrade:
-  1. add the new messenger;
-  2. switch sending to it;
-  3. remove the old one.
+  1. add the new messenger to the route as an inbound messenger;
+  2. make it the outbound messenger;
+  3. wait until no messages are left in flight on the old messenger;
+  4. remove the old one.
 
-  Messages that arrive during the switch are not lost. They can be retried.
-- **Who manages the table:** the contract owner. Adding a messenger for a chain lets that messenger mint or release tokens for that chain, so the owner should be a multisig behind a timelock.
+  A message that fails to execute is kept by the messenger that delivered it, and it can only be retried through that same messenger. So a message that reaches the old messenger after step 4 fails, and it can be retried only after the owner adds the old messenger back.
+- **Who manages the routes:** the contract owner. Adding an inbound messenger for a chain lets that messenger mint or release tokens for that chain, so the owner should be a multisig behind a timelock.
 
-### 5.2 Chain ID passed in, not read from Warp
+### 5.2 Blockchain ID passed in, not read from Warp
 
-- The chain ID is set when the contract is initialized.
-- When the owner adds a messenger, ICTT checks that the messenger reports the same chain ID.
+- The blockchain ID is set when the contract is initialized.
+- When the owner adds a messenger, ICTT checks that the messenger reports the same blockchain ID.
+  - A messenger that reports zero is also accepted, because a Teleporter V1 messenger learns its blockchain ID only when it is first used.
+  - A `TeleporterMessengerV2` also reports zero until it is initialized. Deployment must therefore initialize the bridge messenger before adding it to a route.
 - Avalanche chains use their normal blockchain ID. Ethereum uses its EVM chain ID as a 32-byte value, which is the same ID the bridge uses.
 
 ### 5.3 What stays the same
@@ -135,7 +140,7 @@ ICTT v2 removes `TeleporterRegistry`. Instead, each ICTT contract keeps a small 
 
 ### 5.4 One behaviour change
 
-In v1, any Avalanche chain could register a remote with a Home. In v2, the Home owner must first add a messenger for that chain. This is intended: the owner decides which bridges the Home's locked tokens are exposed to.
+In v1, any Avalanche chain could register a remote with a Home. In v2, the Home owner must first add a route for that chain. This is intended: the owner decides which bridges the Home's locked tokens are exposed to.
 
 ## 6. Scope and decisions
 
@@ -182,15 +187,16 @@ H->>H: release tokens to recipient
 
 ## 8. Security
 
-- **Each chain is tied to its own messenger.** If one bridge path is broken, only the tokens sent over that path are at risk. Because of the backing rule, a forged message can take at most the amount locked for remotes on that chain.
-- **Tokens minted on Ethereum** depend on the Avalanche → Ethereum path:
+- **Each counterparty chain has its own route.** If one connection is broken, only the tokens sent over that connection are at risk. Because of the backing rule, a forged message can take at most the amount locked for remotes on that chain.
+- **Tokens minted on Ethereum** depend on the Avalanche → Ethereum direction:
   - at least 67% of the source chain's stake signs;
   - the validator-set registry on Ethereum is updated correctly;
   - the registry was deployed with the correct initial P-chain validator set.
-- **Tokens released on Avalanche** depend on the Ethereum → Avalanche path:
+- **Tokens released on Avalanche** depend on the Ethereum → Avalanche direction:
   - the ZK proof of Ethereum finality (Signal / RISC Zero);
   - the light-client admin, who can override the light-client state without a proof and is therefore trusted.
-- **The owner of the messenger table** effectively controls minting and releasing.
+- **The owner of the routes** effectively controls minting and releasing.
+- **Cutting off one chain.** Pausing works per messenger, and every Avalanche L1 a Home talks to shares the same Warp messenger. Stopping one compromised L1 today means pausing all of them (Q6).
 - **If the bridge stalls** (an out-of-date validator set or a lagging light client), transfers wait. No funds are lost, and messages can be delivered or retried later.
 
 ## 9. Operations
@@ -199,7 +205,7 @@ H->>H: release tokens to recipient
 - **Gas on Ethereum.** The relayer pays to check validator signatures on Ethereum, and the cost grows with the number of signers. To be measured.
 - **Relayer.** For the MVP, an operator runs the relayer in both directions and users pay no relayer fee.
 - **Monitoring.** Watch:
-  - changes to the messenger table, and pauses;
+  - changes to routes, and pauses;
   - how fresh the validator-set registry is;
   - how far the ZK light client lags;
   - tokens locked in TokenHome compared with TokenRemote's total supply.
@@ -208,19 +214,21 @@ H->>H: release tokens to recipient
 
 ### 10.1 Contracts
 
-- The messenger-per-chain base layer, replacing the registry integration.
-- ICTT v2 TokenHome and TokenRemote on that layer, with the chain ID passed in: ERC20 Home/Remote and Native Home. Native Remote stays on v1: it only runs on Avalanche L1s and interoperates with a v2 Home over the same messenger.
-- Bridge fix that ICTT needs in `ZKAdapter`: accept calls that come through `Adapter`, which a two-way messenger on Ethereum uses to reach it.
+- The routing base layer (`TeleporterRoutedApp`), replacing the registry integration.
+- ICTT v2 TokenHome and TokenRemote on that layer, with the blockchain ID passed in: ERC20 Home/Remote and Native Home. Native Remote stays on v1: it only runs on Avalanche L1s and interoperates with a v2 Home over the same messenger.
+- Bridge fixes that ICTT needs:
+  - `ZKAdapter`: accept calls that come through `Adapter`, which the bridge messenger on Ethereum uses to reach it.
+  - `TeleporterMessengerV2`: retrying a failed message compared its hash against a different message format, so no retry could ever succeed.
 - Go bindings.
 
 ### 10.2 Relayer
 
-- **Avalanche → Ethereum.** Already supported. Verify it with ICTT messages and the two-way `Adapter` setup.
+- **Avalanche → Ethereum.** Already supported. Verify it with ICTT messages and an `Adapter` that carries both directions.
 - **Ethereum → Avalanche.** Needs to:
   - read messages from Ethereum after finality;
   - keep the ZK light client on Avalanche updated, including deciding where the proofs come from;
   - build log proofs and deliver them to Avalanche.
-- **Configuration.** One two-way connection per Avalanche chain ↔ Ethereum pair.
+- **Configuration.** One connection per Avalanche chain ↔ Ethereum pair, carrying both directions.
 
 ### 10.3 Deployment
 
@@ -230,26 +238,26 @@ H->>H: release tokens to recipient
   2. configure their messengers;
   3. register the Remote.
 - Governance:
-  - a multisig with a timelock for the messenger table;
+  - a multisig with a timelock for the routes;
   - admin roles for the registry and the ZK light client.
 
 ### 10.4 Testing
 
 - **Unit tests:**
-  - the messenger-per-chain rules;
+  - the route rules;
   - the existing ICTT tests, ported to v2.
 - **Local end-to-end tests:**
   - register, send both ways, send-and-call on Ethereum, multi-hop;
   - a negative test where the wrong messenger tries to deliver;
-  - the ZK leg is mocked until it is ready.
+  - the Ethereum → Avalanche direction is mocked until the ZK relayer is ready.
 - **Testnet:** Fuji ↔ Sepolia, with the real bridge and relayer.
 - **Gas:** delivery cost on Ethereum.
 
 ## 11. Rollout
 
 1. ICTT v2 contracts and unit tests.
-2. **Avalanche → Ethereum first**, locally, over the real Merkle/BLS path. Remote registration still travels Ethereum → Avalanche, so that one leg uses the mock verifier for now.
-3. Ethereum → Avalanche: relayer support for the ZK path, then sending tokens back and multi-hop from Ethereum.
+2. **Avalanche → Ethereum first**, locally, over the real Merkle/BLS verifier. Remote registration still travels Ethereum → Avalanche, so that one message uses the mock verifier for now.
+3. Ethereum → Avalanche: relayer support for the ZK verifier, then sending tokens back and multi-hop from Ethereum.
 4. Testnet: Fuji ↔ Sepolia.
 5. Audit of ICTT v2 and the bridge, then mainnet.
 
@@ -257,7 +265,7 @@ H->>H: release tokens to recipient
 
 #### Phase 1: Contracts
 
-- [x] Messenger-per-chain base layer (`TeleporterRoutedAppUpgradeable` and its Ownable variant)
+- [x] Routing base layer (`TeleporterRoutedAppUpgradeable` and its Ownable variant)
 - [x] ICTT v2 contracts in `icm-contracts/common/ictt-v2/`:
   - [x] TokenHome and TokenRemote
   - [x] ERC20 Home and ERC20 Remote
@@ -265,25 +273,44 @@ H->>H: release tokens to recipient
   - [x] Upgradeable versions of each
 - [x] `ZKAdapter` accepts calls coming through `Adapter`
 - [x] Unit tests:
-  - [x] routing layer (35)
-  - [x] ICTT v1 suites ported to v2 (182)
-  - [x] `ZKAdapter` (6)
+  - [x] routing layer
+  - [x] ICTT v1 suites ported to v2
+  - [x] `ZKAdapter`
 - [x] Go bindings for ICTT v2, and `ZKAdapter` bindings regenerated
 - [x] `forge fmt` (v1.0.0, the version CI uses) and solhint pass
 - [x] Commit and push (`decentrio/hieu/ictt-v2`)
-- [ ] Open a PR
 - [ ] Native Remote on v2 (deferred; v1 Native Remote works with a v2 Home)
+
+#### Phase 1b: Fixes after review
+
+- [x] Design doc:
+  - [x] §12: in-place upgrade from v1 is not supported yet
+  - [x] §5.1: routes, and how to replace a messenger without losing retries
+  - [x] §5.2: messengers that report a zero blockchain ID
+  - [x] terms aligned with the [glossary](CONTEXT.md); Q6 added
+- [x] Glossary, ADR-0001 and ADR-0002
+- [x] Un-audited notice on every deployable v2 contract
+- [x] v2 settings struct renamed to `TokenRemoteSettingsV2`, so it no longer shares v1's name
+- [x] `TeleporterMessengerV2` can retry a failed message (bug fix, with tests)
+- [x] Unit tests:
+  - [x] storage slots of the routing layer and of ICTT v2
+  - [x] retrying a message after its messenger was replaced
+  - [x] v1 NativeTokenRemote with a v2 Home
+  - [x] Native Home with WETH9, directly and behind a proxy
+- [x] Go bindings regenerated
 
 #### Phase 2: Avalanche → Ethereum (local)
 
-- [x] Test helpers:
-  - [x] deploy ICTT v2 and configure routes
-  - [x] deploy the two-way bridge (`Adapter` and messenger) on both chains
+- [x] Test helper: deploy the bridge (`Adapter` and messenger, both directions) on both chains
 - [x] Register the Remote. This goes Ethereum → Avalanche, so it uses the mock verifier and a manual relay.
-- [x] Send Avalanche → Ethereum over the real Merkle/BLS path; the Remote mints
+- [x] Send Avalanche → Ethereum over the real Merkle/BLS verifier; the Remote mints
 - [x] Send-and-call to a contract on Ethereum
+- [ ] Test helper: deploy ICTT v2 and configure routes (the flow still does this inline)
+- [ ] Unit tests: a separate mock messenger per chain, checking which messenger carried each message
+- [ ] E2E: one connection per chain pair, with the Merkle, mock and Warp relays as adapters, and events matched by the contract that emitted them. The existing Merkle flow uses it too.
 - [ ] Multi-hop: another Avalanche L1 → Home → Ethereum
 - [ ] Negative test: delivery from the wrong messenger is rejected
+- [ ] Rebase onto `main` for #1529 (P-chain height fix in the relayer's Merkle validator updater)
 - [ ] Avalanche → Ethereum delivered by the relayer instead of a manual relay
 
 #### Phase 3: Ethereum → Avalanche
@@ -300,9 +327,10 @@ H->>H: release tokens to recipient
   - [ ] retry
 - [ ] Relayer: start the ZK consensus updater, and add its config
 - [ ] Relayer: check the Avalanche destination client can send a non-Warp delivery transaction
-- [ ] Relayer: two-way connection config
+- [ ] Relayer: config for a connection carrying both directions
 - [ ] End-to-end:
-  - [ ] register the Remote over the real ZK leg instead of the mock
+  - [ ] the ZK relay as a new adapter of the e2e connection
+  - [ ] register the Remote over the real ZK verifier instead of the mock
   - [ ] send back Ethereum → Avalanche; the Home releases
   - [ ] multi-hop: Ethereum → Home → another Avalanche L1
 
@@ -312,26 +340,35 @@ H->>H: release tokens to recipient
   - [ ] bridge contracts via Nick's method
   - [ ] ICTT v2
   - [ ] routes and Remote registration
+  - [ ] check each messenger is initialized before it is added to a route
 - [ ] Relayer config for testnet
 - [ ] Governance:
   - [ ] multisig and timelock for routes
   - [ ] admin roles for the registry and the ZK light client
+- [ ] Runbook: replacing a messenger (wait until it is drained before removing it)
 - [ ] Measure delivery gas on Ethereum
 - [ ] Transfers in both directions on testnet
 
 #### Phase 5: Audit and mainnet
 
-- [ ] Resolve open questions Q1–Q5
+- [ ] Sign the commits and open a PR upstream
+- [ ] Resolve open questions Q1–Q6
+- [ ] If Q5 is yes: migration from v1 to v2 (sets the blockchain ID and the routes), with tests
 - [ ] Audit ICTT v2 and the bridge
 - [ ] Mainnet deployment
 
 ## 12. Existing ICTT v1 deployments
 
 - New deployments use v2.
-- Existing upgradeable v1 contracts can be upgraded to v2 in place. During the upgrade, each chain they already talk to is configured with its current messenger.
-- The message format is unchanged, so v1 and v2 contracts keep working together.
+- The message format is unchanged, so v1 and v2 contracts keep working together. A unit test runs a v1 NativeTokenRemote against a v2 Home.
+- **Upgrading a v1 proxy to v2 in place is not supported yet.**
+  - v2 keeps v1's storage layout.
+  - But v2 has no migration step. After an upgrade the contract would have no blockchain ID and no routes, and it could not be configured.
+  - Supporting it needs a migration that copies the stored blockchain ID and adds a route for each chain the contract already talks to. Whether to build it depends on Q5.
 
 ## 13. Alternatives considered
+
+Recorded in [ADR-0001](adr/0001-routes-instead-of-teleporter-registry.md) and [ADR-0002](adr/0002-ictt-v2-copies-v1-token-logic.md).
 
 - **A registry on Ethereum that does not use Warp.** It would still trust every messenger for every chain, and it cannot use different messengers for different chains.
 - **One fixed messenger per ICTT contract.** A TokenHome could not serve Avalanche L1s and Ethereum at the same time, and switching to a new bridge messenger would require redeploying the token contracts.
@@ -342,4 +379,5 @@ H->>H: release tokens to recipient
 - **Q2.** Should Ethereum remotes have transfer limits at launch, or are pausing and monitoring enough?
 - **Q3.** What fee model should relayers use, and who pays for Ethereum → Avalanche proofs?
 - **Q4.** Who generates the ZK proofs for Ethereum (our own prover or a proving service), and what are the cost and the SLA?
-- **Q5.** Do any existing v1 deployments need to be upgraded?
+- **Q5.** Do any existing v1 deployments need to be upgraded to v2 in place? If so, the migration in §12 has to be built.
+- **Q6.** How should one counterparty chain be cut off when other chains use the same messenger? Options: pause a single route, or allow removing a route's outbound messenger.
