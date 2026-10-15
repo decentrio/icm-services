@@ -62,7 +62,8 @@ abstract contract TokenHome is
         /**
          * @notice Unused. Held the blockchain ID in v1, which v2 reads from
          * {TeleporterRoutedAppUpgradeable-getBlockchainID} instead.
-         * @dev Kept so that the layout matches v1 and a v1 proxy can be upgraded in place.
+         * @dev Kept so that the storage layout matches v1. This alone does not make a v1 proxy
+         * upgradeable to v2: v2 has no migration that sets the blockchain ID and the routes.
          */
         bytes32 _unusedBlockchainID;
         /**

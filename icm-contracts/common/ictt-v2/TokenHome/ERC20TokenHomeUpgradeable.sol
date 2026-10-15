@@ -21,6 +21,11 @@ import {CallUtils} from "@utilities/CallUtils.sol";
 import {ICMInitializable} from "@utilities/ICMInitializable.sol";
 
 /**
+ * THIS IS AN EXAMPLE CONTRACT THAT USES UN-AUDITED CODE.
+ * DO NOT USE THIS CODE IN PRODUCTION.
+ */
+
+/**
  * @title ERC20TokenHomeUpgradeable
  * @notice An {IERC20TokenHome} implementation that locks a specified ERC20 token to be sent to
  * TokenRemote instances on other chains.

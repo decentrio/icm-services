@@ -9,6 +9,11 @@ import {ERC20TokenHomeUpgradeable} from "./ERC20TokenHomeUpgradeable.sol";
 import {ICMInitializable} from "@utilities/ICMInitializable.sol";
 
 /**
+ * THIS IS AN EXAMPLE CONTRACT THAT USES UN-AUDITED CODE.
+ * DO NOT USE THIS CODE IN PRODUCTION.
+ */
+
+/**
  * @title ERC20TokenHome
  * @notice A non-upgradeable version of {ERC20TokenHomeUpgradeable} that calls the parent upgradeable contract's initialize function.
  * @custom:security-contact https://github.com/ava-labs/icm-contracts/blob/main/SECURITY.md

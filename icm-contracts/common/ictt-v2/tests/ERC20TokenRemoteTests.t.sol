@@ -10,7 +10,7 @@ import {TokenRemoteTest} from "./TokenRemoteTests.t.sol";
 import {IERC20SendAndCallReceiver} from
     "../../../avalanche/ictt/interfaces/IERC20SendAndCallReceiver.sol";
 import {TokenRemote} from "../TokenRemote/TokenRemote.sol";
-import {TokenRemoteSettings} from "../TokenRemote/interfaces/TokenRemoteSettings.sol";
+import {TokenRemoteSettingsV2} from "../TokenRemote/interfaces/TokenRemoteSettingsV2.sol";
 import {ERC20TokenRemoteUpgradeable} from "../TokenRemote/ERC20TokenRemoteUpgradeable.sol";
 import {ERC20TokenRemote} from "../TokenRemote/ERC20TokenRemote.sol";
 import {SafeERC20} from "@openzeppelin/contracts@5.1.0/token/ERC20/utils/SafeERC20.sol";
@@ -56,7 +56,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
      */
     function testNonUpgradeableInitialization() public {
         app = new ERC20TokenRemote(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -75,7 +75,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
         app = new ERC20TokenRemoteUpgradeable(ICMInitializable.Disallowed);
         vm.expectRevert(abi.encodeWithSelector(Initializable.InvalidInitialization.selector));
         app.initialize(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -91,7 +91,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testZeroBlockchainID() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: bytes32(0),
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -108,7 +108,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testZeroTeleporterMessengerAddress() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: address(0),
                 teleporterManager: address(this),
@@ -127,7 +127,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
         // The messenger reports a different chain than the one the remote is deployed on.
         _initMockTeleporterMessenger(OTHER_BLOCKCHAIN_ID);
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -144,7 +144,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testZeroTeleporterManagerAddress() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(0),
@@ -161,7 +161,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testZeroTokenHomeBlockchainID() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -178,7 +178,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testDeployToSameBlockchain() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -195,7 +195,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
 
     function testZeroTokenHomeAddress() public {
         _invalidInitialization(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -257,7 +257,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
         ERC20TokenRemoteUpgradeable instance =
             new ERC20TokenRemoteUpgradeable(ICMInitializable.Allowed);
         instance.initialize(
-            TokenRemoteSettings({
+            TokenRemoteSettingsV2({
                 blockchainID: DEFAULT_TOKEN_REMOTE_BLOCKCHAIN_ID,
                 teleporterMessenger: MOCK_TELEPORTER_MESSENGER_ADDRESS,
                 teleporterManager: address(this),
@@ -374,7 +374,7 @@ contract ERC20TokenRemoteTest is ERC20TokenTransferrerTest, TokenRemoteTest {
     }
 
     function _invalidInitialization(
-        TokenRemoteSettings memory settings,
+        TokenRemoteSettingsV2 memory settings,
         string memory tokenName,
         string memory tokenSymbol,
         uint8 tokenDecimals_,

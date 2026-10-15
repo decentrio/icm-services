@@ -6,7 +6,7 @@
 pragma solidity 0.8.30;
 
 import {TokenRemote} from "./TokenRemote.sol";
-import {TokenRemoteSettings} from "./interfaces/TokenRemoteSettings.sol";
+import {TokenRemoteSettingsV2} from "./interfaces/TokenRemoteSettingsV2.sol";
 import {IERC20TokenTransferrer} from "../../../avalanche/ictt/interfaces/IERC20TokenTransferrer.sol";
 import {IERC20SendAndCallReceiver} from
     "../../../avalanche/ictt/interfaces/IERC20SendAndCallReceiver.sol";
@@ -21,6 +21,11 @@ import {ERC20Upgradeable} from
 import {SafeERC20TransferFrom} from "@utilities/SafeERC20TransferFrom.sol";
 import {CallUtils} from "@utilities/CallUtils.sol";
 import {ICMInitializable} from "@utilities/ICMInitializable.sol";
+
+/**
+ * THIS IS AN EXAMPLE CONTRACT THAT USES UN-AUDITED CODE.
+ * DO NOT USE THIS CODE IN PRODUCTION.
+ */
 
 /**
  * @title ERC20TokenRemoteUpgradeable
@@ -77,7 +82,7 @@ contract ERC20TokenRemoteUpgradeable is IERC20TokenTransferrer, ERC20Upgradeable
      * @param tokenDecimals The number of decimals for the ERC20 token.
      */
     function initialize(
-        TokenRemoteSettings memory settings,
+        TokenRemoteSettingsV2 memory settings,
         string memory tokenName,
         string memory tokenSymbol,
         uint8 tokenDecimals
@@ -87,7 +92,7 @@ contract ERC20TokenRemoteUpgradeable is IERC20TokenTransferrer, ERC20Upgradeable
 
     // solhint-disable-next-line func-name-mixedcase
     function __ERC20TokenRemote_init(
-        TokenRemoteSettings memory settings,
+        TokenRemoteSettingsV2 memory settings,
         string memory tokenName,
         string memory tokenSymbol,
         uint8 tokenDecimals

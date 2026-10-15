@@ -6,7 +6,7 @@
 pragma solidity 0.8.30;
 
 import {ITokenRemote} from "../../../avalanche/ictt/TokenRemote/interfaces/ITokenRemote.sol";
-import {TokenRemoteSettings} from "./interfaces/TokenRemoteSettings.sol";
+import {TokenRemoteSettingsV2} from "./interfaces/TokenRemoteSettingsV2.sol";
 import {
     SendTokensInput,
     SendAndCallInput,
@@ -56,7 +56,8 @@ abstract contract TokenRemote is
         /**
          * @notice Unused. Held the blockchain ID in v1, which v2 reads from
          * {TeleporterRoutedAppUpgradeable-getBlockchainID} instead.
-         * @dev Kept so that the layout matches v1 and a v1 proxy can be upgraded in place.
+         * @dev Kept so that the storage layout matches v1. This alone does not make a v1 proxy
+         * upgradeable to v2: v2 has no migration that sets the blockchain ID and the routes.
          */
         bytes32 _unusedBlockchainID;
         /// @notice The blockchain ID of the TokenHome instance this contract receives tokens from.
@@ -162,7 +163,7 @@ abstract contract TokenRemote is
     // solhint-disable ordering
     // solhint-disable-next-line func-name-mixedcase
     function __TokenRemote_init(
-        TokenRemoteSettings memory settings,
+        TokenRemoteSettingsV2 memory settings,
         uint256 initialReserveImbalance_,
         uint8 tokenDecimals
     ) internal onlyInitializing {
@@ -173,7 +174,7 @@ abstract contract TokenRemote is
 
     // solhint-disable-next-line func-name-mixedcase
     function __TokenRemote_init_unchained(
-        TokenRemoteSettings memory settings,
+        TokenRemoteSettingsV2 memory settings,
         uint256 initialReserveImbalance_,
         uint8 tokenDecimals
     ) internal onlyInitializing {

@@ -19,7 +19,7 @@ pragma solidity 0.8.30;
  * @param tokenHomeAddress The address of the associated token home contract.
  * @param tokenHomeDecimals The number of decimal places used by the token home's token.
  */
-struct TokenRemoteSettings {
+struct TokenRemoteSettingsV2 {
     bytes32 blockchainID;
     address teleporterMessenger;
     address teleporterManager;

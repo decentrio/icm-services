@@ -21,6 +21,11 @@ import {Address} from "@openzeppelin/contracts@5.1.0/utils/Address.sol";
 import {ICMInitializable} from "@utilities/ICMInitializable.sol";
 
 /**
+ * THIS IS AN EXAMPLE CONTRACT THAT USES UN-AUDITED CODE.
+ * DO NOT USE THIS CODE IN PRODUCTION.
+ */
+
+/**
  * @title NativeTokenHomeUpgradeable
  * @notice An {INativeTokenHome} implementation that locks the native token of this chain to be transferred to
  * TokenRemote instances on other chains.

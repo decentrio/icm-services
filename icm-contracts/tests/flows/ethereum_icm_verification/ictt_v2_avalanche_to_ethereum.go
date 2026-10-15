@@ -86,7 +86,7 @@ func ICTTV2AvalancheToEthereum(
 	remoteAddress, tx, remote, err := erc20tokenremotev2.DeployERC20TokenRemote(
 		bridge.ethOpts,
 		ethInfo.EthClient,
-		erc20tokenremotev2.TokenRemoteSettings{
+		erc20tokenremotev2.TokenRemoteSettingsV2{
 			BlockchainID:          ethereumBlockchainID,
 			TeleporterMessenger:   bridge.messengerAddress,
 			TeleporterManager:     fundedEthereumAddress,
