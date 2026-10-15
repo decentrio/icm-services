@@ -223,7 +223,7 @@ H->>H: release tokens to recipient
 
 ### 10.2 Relayer
 
-- **Avalanche → Ethereum.** Already supported. Verify it with ICTT messages and an `Adapter` that carries both directions.
+- **Avalanche → Ethereum.** Already supported, and verified end to end with ICTT messages through an `Adapter` that carries both directions. In the relayer config, the message contract is the Merkle registry, not the messenger or the `Adapter`, because the registry is what sends the Warp message.
 - **Ethereum → Avalanche.** Needs to:
   - read messages from Ethereum after finality;
   - keep the ZK light client on Avalanche updated, including deciding where the proofs come from;
@@ -301,17 +301,18 @@ H->>H: release tokens to recipient
 
 #### Phase 2: Avalanche → Ethereum (local)
 
-- [x] Test helper: deploy the bridge (`Adapter` and messenger, both directions) on both chains
+- [x] Test helpers:
+  - [x] deploy the bridge (`Adapter` and messenger, both directions) on both chains
+  - [x] deploy ICTT v2 and configure routes
 - [x] Register the Remote. This goes Ethereum → Avalanche, so it uses the mock verifier and a manual relay.
 - [x] Send Avalanche → Ethereum over the real Merkle/BLS verifier; the Remote mints
 - [x] Send-and-call to a contract on Ethereum
-- [ ] Test helper: deploy ICTT v2 and configure routes (the flow still does this inline)
-- [ ] Unit tests: a separate mock messenger per chain, checking which messenger carried each message
-- [ ] E2E: one connection per chain pair, with the Merkle, mock and Warp relays as adapters, and events matched by the contract that emitted them. The existing Merkle flow uses it too.
-- [ ] Multi-hop: another Avalanche L1 → Home → Ethereum
-- [ ] Negative test: delivery from the wrong messenger is rejected
-- [ ] Rebase onto `main` for #1529 (P-chain height fix in the relayer's Merkle validator updater)
-- [ ] Avalanche → Ethereum delivered by the relayer instead of a manual relay
+- [x] Unit tests: a separate mock messenger per remote chain, and multi-hop to a remote on another chain, so a second hop sent through the wrong messenger fails
+- [x] E2E: a relay for each direction, with the relayer, mock and Warp relays as adapters, and events matched by the contract that emitted them. The existing Merkle flow keeps its own setup: it tests how the registry is wired, not ICTT.
+- [x] Multi-hop: C-Chain → Home → Ethereum (Warp to the Home, the bridge from it)
+- [x] Negative test: a second messenger on the L1 delivers a message from Ethereum that its verifier accepts, and the Home rejects it. The bridge's messenger then delivers the same message and the Home releases the tokens.
+- [x] Rebase onto `main` for #1529 (P-chain height fix in the relayer's Merkle validator updater)
+- [x] Avalanche → Ethereum delivered by the relayer instead of a manual relay
 
 #### Phase 3: Ethereum → Avalanche
 
@@ -331,7 +332,7 @@ H->>H: release tokens to recipient
 - [ ] End-to-end:
   - [ ] the ZK relay as a new adapter of the e2e connection
   - [ ] register the Remote over the real ZK verifier instead of the mock
-  - [ ] send back Ethereum → Avalanche; the Home releases
+  - [ ] send back Ethereum → Avalanche over the real ZK verifier (works today over the mock verifier)
   - [ ] multi-hop: Ethereum → Home → another Avalanche L1
 
 #### Phase 4: Testnet (Fuji ↔ Sepolia)
