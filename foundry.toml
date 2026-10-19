@@ -8,6 +8,8 @@ test = 'tests'
 bytecode_hash = "none"
 optimizer = true
 optimizer_runs = 200
+# The Ethereum verifier tests replay the mainnet fixture of the Go e2e test.
+fs_permissions = [{ access = "read", path = "./tests/testdata" }]
 
 [profile.common]
 src = 'icm-contracts/common/'
