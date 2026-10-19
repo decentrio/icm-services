@@ -9,6 +9,7 @@ import {Test, Vm} from "forge-std/Test.sol";
 import {IRiscZeroVerifier, Receipt as RiscZeroReceipt} from "@risc0/IRiscZeroVerifier.sol";
 import {ZKAdapter} from "../ZKAdapter.sol";
 import {EthereumAdapter, Attestation} from "../EthereumAdapter.sol";
+import {EthereumLogVerifier} from "../EthereumLogVerifier.sol";
 import {Consensus, Execution} from "../StateManagerLibrary.sol";
 import {
     IAdapter,
@@ -63,11 +64,9 @@ contract ZKAdapterTestTeleporter {
  * destination chain, which a bidirectional Avalanche <-> Ethereum messenger needs.
  *
  * verifyMessage accepts only a TeleporterV2MessageSent log emitted by the adapter itself, from the
- * source chain and network it serves; these checks run before any proof is verified.
+ * source chain and network it serves, whose payload is the message being delivered.
  */
 abstract contract EthereumAdapterTest is Test {
-    uint64 private constant _START_EPOCH = 1_000;
-    uint256 private constant _GENESIS_TIME = 1_606_824_023;
     bytes32 private constant _AVALANCHE_BLOCKCHAIN_ID = keccak256("avalanche");
     bytes32 private constant _ETHEREUM_BLOCKCHAIN_ID = bytes32(uint256(1));
     address private constant _WRAPPER_ADAPTER = address(0xA11CE);
@@ -78,38 +77,9 @@ abstract contract EthereumAdapterTest is Test {
 
     event TeleporterV2MessageSent(bytes encodedMessage);
 
-    /// @dev The adapter under test, serving Ethereum mainnet (chain ID 1).
-    function _newAdapter() internal virtual returns (EthereumAdapter);
-
     function setUp() public {
-        vm.warp(_GENESIS_TIME + uint256(_START_EPOCH + 2) * 32 * 12);
         _adapter = _newAdapter();
         _teleporter = new ZKAdapterTestTeleporter(_WRAPPER_ADAPTER);
-    }
-
-    function _zkAdapter() internal returns (EthereumAdapter) {
-        Execution.BeaconConfig memory config;
-        address admin = makeAddr("admin");
-        return new ZKAdapter({
-            sourceChainId_: 1,
-            startingState: Consensus.State({
-                currentJustifiedCheckpoint: Consensus.Checkpoint({
-                    epoch: _START_EPOCH + 1,
-                    root: keccak256("justified")
-                }),
-                finalizedCheckpoint: Consensus.Checkpoint({
-                    epoch: _START_EPOCH,
-                    root: keccak256("finalized")
-                })
-            }),
-            beaconConfig_: config,
-            genesisTime_: _GENESIS_TIME,
-            permissibleTimespan_: 86_400,
-            verifier: address(new ZKAdapterTestVerifier()),
-            imageID_: bytes32(uint256(1)),
-            admin: admin,
-            superAdmin: admin
-        });
     }
 
     function testSendMessageFromOriginTeleporter() public {
@@ -229,6 +199,38 @@ abstract contract EthereumAdapterTest is Test {
         _adapter.verifyMessage(icm);
     }
 
+    function testVerifyMessageAcceptsTheLogOfThisMessage() public {
+        TeleporterICMMessage memory icm = _icmMessage();
+        _mockProvenLog(abi.encode(icm.message));
+        assertTrue(_adapter.verifyMessage(icm));
+    }
+
+    function testVerifyMessageRejectsTheLogOfAnotherMessage() public {
+        TeleporterICMMessage memory icm = _icmMessage();
+        TeleporterMessageV2 memory other = _message();
+        other.message = hex"0bad";
+        _mockProvenLog(abi.encode(other));
+        vm.expectRevert("payload mismatch");
+        _adapter.verifyMessage(icm);
+    }
+
+    /// @dev The adapter under test, serving Ethereum mainnet (chain ID 1).
+    function _newAdapter() internal virtual returns (EthereumAdapter);
+
+    /**
+     * @dev Stands in for the proofs: the adapter's verifyLogAndExtract returns a
+     * TeleporterV2MessageSent log carrying `encodedMessage`.
+     */
+    function _mockProvenLog(
+        bytes memory encodedMessage
+    ) internal {
+        vm.mockCall(
+            address(_adapter),
+            abi.encodeWithSelector(EthereumLogVerifier.verifyLogAndExtract.selector),
+            abi.encode(abi.encode(encodedMessage))
+        );
+    }
+
     function _attestation() internal view returns (Attestation memory att) {
         att.logProof.expectedEmitter = address(_adapter);
         att.logProof.expectedTopic0 = keccak256("TeleporterV2MessageSent(bytes)");
@@ -253,7 +255,33 @@ abstract contract EthereumAdapterTest is Test {
 }
 
 contract ZKAdapterTest is EthereumAdapterTest {
+    uint64 private constant _START_EPOCH = 1_000;
+    uint256 private constant _GENESIS_TIME = 1_606_824_023;
+
     function _newAdapter() internal override returns (EthereumAdapter) {
-        return _zkAdapter();
+        // The starting state must not be in the future.
+        vm.warp(_GENESIS_TIME + uint256(_START_EPOCH + 2) * 32 * 12);
+        Execution.BeaconConfig memory config;
+        address admin = makeAddr("admin");
+        return new ZKAdapter({
+            sourceChainId_: 1,
+            startingState: Consensus.State({
+                currentJustifiedCheckpoint: Consensus.Checkpoint({
+                    epoch: _START_EPOCH + 1,
+                    root: keccak256("justified")
+                }),
+                finalizedCheckpoint: Consensus.Checkpoint({
+                    epoch: _START_EPOCH,
+                    root: keccak256("finalized")
+                })
+            }),
+            beaconConfig_: config,
+            genesisTime_: _GENESIS_TIME,
+            permissibleTimespan_: 86_400,
+            verifier: address(new ZKAdapterTestVerifier()),
+            imageID_: bytes32(uint256(1)),
+            admin: admin,
+            superAdmin: admin
+        });
     }
 }

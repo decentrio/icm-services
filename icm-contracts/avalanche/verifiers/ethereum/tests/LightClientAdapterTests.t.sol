@@ -46,22 +46,14 @@ contract LightClientAdapterSharedTest is EthereumAdapterTest {
  * ZK light client, using a real Ethereum mainnet log (a USDC transfer) and its proofs.
  */
 contract LightClientAdapterTest is Test {
-    uint64 private constant _START_EPOCH = 1_000;
-    uint256 private constant _GENESIS_TIME = 1_606_824_023;
-
     struct Fixture {
         bytes32 anchorRoot;
         Execution.Proof execProof;
         LogReceipt.Proof logProof;
     }
 
-    event ZKEventImported(
-        uint256 indexed sourceChainId,
-        uint256 indexed beaconSlot,
-        address indexed emitter,
-        bytes32 executionRoot,
-        uint256 logIndex
-    );
+    uint64 private constant _START_EPOCH = 1_000;
+    uint256 private constant _GENESIS_TIME = 1_606_824_023;
 
     function testVerifiesARealMainnetLogAgainstTheSourcesRoot() public {
         Fixture memory f = _fixture();
@@ -70,7 +62,7 @@ contract LightClientAdapterTest is Test {
         LightClientAdapter adapter = new LightClientAdapter(1, _fuluConfig(), source);
 
         vm.expectEmit(true, true, true, true, address(adapter));
-        emit ZKEventImported(
+        emit EthereumLogVerifier.ZKEventImported(
             1,
             f.execProof.targetSlot,
             f.logProof.expectedEmitter,
@@ -124,6 +116,19 @@ contract LightClientAdapterTest is Test {
         adapter.verifyLogAndExtract(f.execProof, f.logProof);
     }
 
+    /// @dev The Boundless state manager proves logs against the roots its own transitions confirm.
+    function testBoundlessStateManagerVerifiesAgainstItsOwnConfirmedRoots() public {
+        Fixture memory f = _fixture();
+        ZKStateManager manager = _stateManager();
+        vm.expectRevert("Anchor slot is undefined");
+        manager.verifyLogAndExtract(f.execProof, f.logProof);
+
+        Journal memory journal;
+        journal.postState.finalizedCheckpoint.root = f.anchorRoot;
+        manager.manualTransition(abi.encode(journal), f.execProof.anchorSlot);
+        manager.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
     function testRejectsAZeroSourceChainId() public {
         TestBeaconRootSource source = new TestBeaconRootSource();
         vm.expectRevert("Invalid chain ID");
@@ -133,18 +138,6 @@ contract LightClientAdapterTest is Test {
     function testRejectsAMissingSource() public {
         vm.expectRevert("Invalid beacon root source");
         new LightClientAdapter(1, _fuluConfig(), IBeaconRootSource(address(0)));
-    }
-
-    /// @dev Generalized indices of the Fulu beacon state and block layouts.
-    function _fuluConfig() private pure returns (Execution.BeaconConfig memory) {
-        return Execution.BeaconConfig({
-            gIndexBlockStateRoot: 11,
-            gIndexExecRoot: 88,
-            gIndexBaseStateRoots: 70,
-            stateRootsDepth: 13,
-            gIndexReceiptsRoot: 35,
-            stateRootsVectorSize: 8192
-        });
     }
 
     function _stateManager() private returns (ZKStateManager) {
@@ -201,6 +194,18 @@ contract LightClientAdapterTest is Test {
             logIndex: vm.parseJsonUint(json, ".receiptProof.logIndex"),
             expectedEmitter: vm.parseJsonAddress(json, ".receiptProof.expectedEmitter"),
             expectedTopic0: vm.parseJsonBytes32(json, ".receiptProof.expectedTopic0")
+        });
+    }
+
+    /// @dev Generalized indices of the Fulu beacon state and block layouts.
+    function _fuluConfig() private pure returns (Execution.BeaconConfig memory) {
+        return Execution.BeaconConfig({
+            gIndexBlockStateRoot: 11,
+            gIndexExecRoot: 88,
+            gIndexBaseStateRoots: 70,
+            stateRootsDepth: 13,
+            gIndexReceiptsRoot: 35,
+            stateRootsVectorSize: 8192
         });
     }
 }
