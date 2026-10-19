@@ -11,7 +11,9 @@ pragma solidity ^0.8.30;
 
 import {AccessControl} from "@openzeppelin/contracts@5.1.0/access/AccessControl.sol";
 import {IRiscZeroVerifier} from "@risc0/IRiscZeroVerifier.sol";
-import {Consensus, Execution, Receipt} from "./StateManagerLibrary.sol";
+import {Consensus, Execution} from "./StateManagerLibrary.sol";
+import {EthereumLogVerifier} from "./EthereumLogVerifier.sol";
+import {IBeaconRootSource} from "./IBeaconRootSource.sol";
 
 /**
  * THIS IS AN EXAMPLE CONTRACT THAT USES UN-AUDITED CODE.
@@ -56,17 +58,18 @@ struct ZKEventInfo {
     bytes logData;
 }
 
-contract ZKStateManager is AccessControl {
+/**
+ * @notice Tracks Ethereum finality from Boundless proofs of beacon state transitions, and is a
+ * source of the beacon roots it confirms.
+ */
+contract ZKStateManager is AccessControl, EthereumLogVerifier, IBeaconRootSource {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant UNDEFINED_ROOT = bytes32(0);
 
     /// @notice Number of slots per epoch in the beacon chain
     uint64 public constant SLOT_PER_EPOCH = 32;
 
     /// @notice Seconds per slot on the Ethereum beacon chain
     uint64 public constant SECONDS_PER_SLOT = 12;
-
-    uint256 public immutable sourceChainId;
 
     /**
      * @notice Unix timestamp of the tracked beacon chain's genesis, i.e. the start of slot 0
@@ -80,11 +83,6 @@ contract ZKStateManager is AccessControl {
      * @dev Updated atomically through state transitions to ensure consistency
      */
     Consensus.State private _currentState;
-
-    /**
-     * @notice The beacon chain config used to verify execution layer data.
-     */
-    Execution.BeaconConfig internal _beaconConfig;
 
     /**
      * @notice Maps a beacon chain slot to its verified beacon block root
@@ -123,13 +121,6 @@ contract ZKStateManager is AccessControl {
     event ConfirmedBeaconBlock(uint64 indexed slot, bytes32 indexed root);
     event ImageIDUpdated(bytes32 indexed newImageID, bytes32 indexed oldImageID);
     event PermissibleTimespanUpdated(uint24 indexed permissibleTimespan);
-    event ZKEventImported(
-        uint256 indexed sourceChainId,
-        uint256 indexed beaconSlot,
-        address indexed emitter,
-        bytes32 executionRoot,
-        uint256 logIndex
-    );
 
     /// @notice Errors
     error InvalidArgument();
@@ -160,10 +151,7 @@ contract ZKStateManager is AccessControl {
         bytes32 imageID_,
         address admin,
         address superAdmin
-    ) {
-        require(newSourceChainId != 0, "Invalid chain ID");
-        sourceChainId = newSourceChainId;
-
+    ) EthereumLogVerifier(newSourceChainId, beaconConfig) {
         require(genesisTime_ != 0, "Invalid genesis time");
         genesisTime = genesisTime_;
 
@@ -175,7 +163,6 @@ contract ZKStateManager is AccessControl {
             "Starting state in the future"
         );
         _currentState = startingState;
-        _beaconConfig = beaconConfig;
         permissibleTimespan = permissibleTimespan_;
         verifier = verifier_;
         imageID = imageID_;
@@ -198,33 +185,6 @@ contract ZKStateManager is AccessControl {
         _verify(journal, consensus);
         // Update the contract state to reflect the transition.
         _transition(journal, consensus.finalizedSlot);
-    }
-
-    /**
-     * @notice Verifies that a specific log was emitted on the beacon chain and returns the log.
-     * @dev This is the main entry point for bridging events. It performs two key verifications:
-     * 1. Execution Verification: Validates that the provided `targetReceiptsRoot` is part of the canonical beacon chain history using the `execProof`.
-     * 2. Log Verification: Uses the validated `targetReceiptsRoot` to verify the inclusion  of a specific Receipt (and Log) via the `logProof`.
-     * Once verified, it emits a `ZKEventImported` event.
-     * @param execProof The execution proof linking a receipt root to a trusted beacon block root.
-     * @param logProof The log proof establishing the receipt and log inclusion against a trusted receipts root.
-     */
-    function verifyLogAndExtract(
-        Execution.Proof calldata execProof,
-        Receipt.Proof calldata logProof
-    ) external returns (bytes memory) {
-        bytes32 anchorRoot = _allowedBeaconBlocks[execProof.anchorSlot];
-        require(anchorRoot != UNDEFINED_ROOT, "Anchor slot is undefined");
-        Execution.verify(anchorRoot, execProof, _beaconConfig);
-        bytes memory logData = Receipt.verifyAndExtractLog(execProof.targetReceiptsRoot, logProof);
-        emit ZKEventImported(
-            sourceChainId,
-            execProof.targetSlot,
-            logProof.expectedEmitter,
-            execProof.targetExecutionHeaderRoot,
-            logProof.logIndex
-        );
-        return logData;
     }
 
     function updateImageID(
@@ -272,6 +232,13 @@ contract ZKStateManager is AccessControl {
         valid = root != UNDEFINED_ROOT;
     }
 
+    /// @inheritdoc IBeaconRootSource
+    function beaconRootAt(
+        uint64 slot
+    ) external view returns (bytes32) {
+        return _allowedBeaconBlocks[slot];
+    }
+
     /**
      * @notice Returns the wall-clock time at which `epoch` begins on the tracked beacon chain.
      */
@@ -279,6 +246,12 @@ contract ZKStateManager is AccessControl {
         uint64 epoch
     ) public view returns (uint256) {
         return genesisTime + uint256(epoch) * SLOT_PER_EPOCH * SECONDS_PER_SLOT;
+    }
+
+    function _beaconRoot(
+        uint64 slot
+    ) internal view override returns (bytes32) {
+        return _allowedBeaconBlocks[slot];
     }
 
     /**
