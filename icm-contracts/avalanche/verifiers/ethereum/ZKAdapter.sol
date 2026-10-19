@@ -6,7 +6,7 @@
 pragma solidity ^0.8.30;
 
 import {ZKStateManager} from "./ZKStateManager.sol";
-import {EthereumAdapter, Attestation} from "./EthereumAdapter.sol";
+import {EthereumAdapter} from "./EthereumAdapter.sol";
 import {Consensus, Execution} from "./StateManagerLibrary.sol";
 
 /**

@@ -236,7 +236,7 @@ contract ZKStateManager is AccessControl, EthereumLogVerifier, IBeaconRootSource
     function beaconRootAt(
         uint64 slot
     ) external view returns (bytes32) {
-        return _allowedBeaconBlocks[slot];
+        return _beaconRoot(slot);
     }
 
     /**
@@ -246,12 +246,6 @@ contract ZKStateManager is AccessControl, EthereumLogVerifier, IBeaconRootSource
         uint64 epoch
     ) public view returns (uint256) {
         return genesisTime + uint256(epoch) * SLOT_PER_EPOCH * SECONDS_PER_SLOT;
-    }
-
-    function _beaconRoot(
-        uint64 slot
-    ) internal view override returns (bytes32) {
-        return _allowedBeaconBlocks[slot];
     }
 
     /**
@@ -276,6 +270,12 @@ contract ZKStateManager is AccessControl, EthereumLogVerifier, IBeaconRootSource
             _allowedBeaconBlocks[slot] = root;
         }
         emit ConfirmedBeaconBlock(slot, root);
+    }
+
+    function _beaconRoot(
+        uint64 slot
+    ) internal view override returns (bytes32) {
+        return _allowedBeaconBlocks[slot];
     }
 
     /**

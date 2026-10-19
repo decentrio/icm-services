@@ -26,6 +26,7 @@ abstract contract EthereumLogVerifier {
      */
     Execution.BeaconConfig internal _beaconConfig;
 
+    /// @dev Named for the ZK sources it was first emitted for; the name is kept for the ABI.
     event ZKEventImported(
         uint256 indexed sourceChainId,
         uint256 indexed beaconSlot,
