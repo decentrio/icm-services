@@ -8,6 +8,7 @@ pragma solidity ^0.8.30;
 import {Test, Vm} from "forge-std/Test.sol";
 import {IRiscZeroVerifier, Receipt as RiscZeroReceipt} from "@risc0/IRiscZeroVerifier.sol";
 import {ZKAdapter} from "../ZKAdapter.sol";
+import {EthereumAdapter, Attestation} from "../EthereumAdapter.sol";
 import {Consensus, Execution} from "../StateManagerLibrary.sol";
 import {
     IAdapter,
@@ -54,12 +55,17 @@ contract ZKAdapterTestTeleporter {
 }
 
 /**
- * @dev sendMessage emits a log that verifyMessage on the destination chain accepts as authentic, so
+ * @dev Behaviour every Ethereum adapter shares, whatever its source of beacon roots.
+ *
+ * sendMessage emits a log that verifyMessage on the destination chain accepts as authentic, so
  * only the messenger named in the message, or the adapter that messenger sends through, may call it.
- * Accepting the adapter is what lets ZKAdapter sit behind an {Adapter} wrapper that dispatches by
+ * Accepting the adapter is what lets the adapter sit behind an {Adapter} wrapper that dispatches by
  * destination chain, which a bidirectional Avalanche <-> Ethereum messenger needs.
+ *
+ * verifyMessage accepts only a TeleporterV2MessageSent log emitted by the adapter itself, from the
+ * source chain and network it serves; these checks run before any proof is verified.
  */
-contract ZKAdapterSendMessageTest is Test {
+abstract contract EthereumAdapterTest is Test {
     uint64 private constant _START_EPOCH = 1_000;
     uint256 private constant _GENESIS_TIME = 1_606_824_023;
     bytes32 private constant _AVALANCHE_BLOCKCHAIN_ID = keccak256("avalanche");
@@ -67,16 +73,24 @@ contract ZKAdapterSendMessageTest is Test {
     address private constant _WRAPPER_ADAPTER = address(0xA11CE);
     address private constant _ATTACKER = address(0xBAD);
 
-    ZKAdapter private _adapter;
+    EthereumAdapter private _adapter;
     ZKAdapterTestTeleporter private _teleporter;
 
     event TeleporterV2MessageSent(bytes encodedMessage);
 
+    /// @dev The adapter under test, serving Ethereum mainnet (chain ID 1).
+    function _newAdapter() internal virtual returns (EthereumAdapter);
+
     function setUp() public {
         vm.warp(_GENESIS_TIME + uint256(_START_EPOCH + 2) * 32 * 12);
+        _adapter = _newAdapter();
+        _teleporter = new ZKAdapterTestTeleporter(_WRAPPER_ADAPTER);
+    }
+
+    function _zkAdapter() internal returns (EthereumAdapter) {
         Execution.BeaconConfig memory config;
         address admin = makeAddr("admin");
-        _adapter = new ZKAdapter({
+        return new ZKAdapter({
             sourceChainId_: 1,
             startingState: Consensus.State({
                 currentJustifiedCheckpoint: Consensus.Checkpoint({
@@ -96,7 +110,6 @@ contract ZKAdapterSendMessageTest is Test {
             admin: admin,
             superAdmin: admin
         });
-        _teleporter = new ZKAdapterTestTeleporter(_WRAPPER_ADAPTER);
     }
 
     function testSendMessageFromOriginTeleporter() public {
@@ -184,6 +197,50 @@ contract ZKAdapterSendMessageTest is Test {
         assertTrue(emitted);
     }
 
+    function testVerifyMessageRejectsAnotherSourceChain() public {
+        TeleporterICMMessage memory icm = _icmMessage();
+        icm.sourceBlockchainID = bytes32(uint256(11_155_111));
+        vm.expectRevert("bad source chain");
+        _adapter.verifyMessage(icm);
+    }
+
+    function testVerifyMessageRejectsAnotherNetwork() public {
+        TeleporterICMMessage memory icm = _icmMessage();
+        icm.sourceNetworkID = 2;
+        vm.expectRevert("bad network");
+        _adapter.verifyMessage(icm);
+    }
+
+    function testVerifyMessageRejectsALogFromAnotherEmitter() public {
+        Attestation memory att = _attestation();
+        att.logProof.expectedEmitter = _ATTACKER;
+        TeleporterICMMessage memory icm = _icmMessage();
+        icm.attestation = abi.encode(att);
+        vm.expectRevert("bad emitter");
+        _adapter.verifyMessage(icm);
+    }
+
+    function testVerifyMessageRejectsAnotherEvent() public {
+        Attestation memory att = _attestation();
+        att.logProof.expectedTopic0 = keccak256("Transfer(address,address,uint256)");
+        TeleporterICMMessage memory icm = _icmMessage();
+        icm.attestation = abi.encode(att);
+        vm.expectRevert("bad topic");
+        _adapter.verifyMessage(icm);
+    }
+
+    function _attestation() internal view returns (Attestation memory att) {
+        att.logProof.expectedEmitter = address(_adapter);
+        att.logProof.expectedTopic0 = keccak256("TeleporterV2MessageSent(bytes)");
+    }
+
+    function _icmMessage() internal view returns (TeleporterICMMessage memory icm) {
+        icm.message = _message();
+        icm.sourceNetworkID = 1;
+        icm.sourceBlockchainID = bytes32(uint256(1));
+        icm.attestation = abi.encode(_attestation());
+    }
+
     function _message() internal view returns (TeleporterMessageV2 memory message) {
         message.messageNonce = 1;
         message.originSenderAddress = address(0x5E11DE5);
@@ -192,5 +249,11 @@ contract ZKAdapterSendMessageTest is Test {
         message.destinationAddress = address(0xD5);
         message.requiredGasLimit = 100_000;
         message.message = hex"deadbeef";
+    }
+}
+
+contract ZKAdapterTest is EthereumAdapterTest {
+    function _newAdapter() internal override returns (EthereumAdapter) {
+        return _zkAdapter();
     }
 }
