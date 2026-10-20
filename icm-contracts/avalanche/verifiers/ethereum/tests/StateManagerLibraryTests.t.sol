@@ -81,6 +81,23 @@ contract ExecutionTest is Test {
         proof.targetReceiptsProof[0] = original;
     }
 
+    /**
+     * @notice A branch must have exactly the depth of its generalized index: extra siblings are not
+     * ignored.
+     */
+    function testVerifyRevertsOnABranchLongerThanItsIndex() public {
+        (Execution.Proof memory proof, bytes32 beaconBlockRoot) =
+            _buildFullProof(bytes32(uint256(0xCAFE)), 0, 1);
+        bytes32[] memory longer = new bytes32[](proof.targetReceiptsProof.length + 1);
+        for (uint256 i = 0; i < proof.targetReceiptsProof.length; i++) {
+            longer[i] = proof.targetReceiptsProof[i];
+        }
+        proof.targetReceiptsProof = longer;
+
+        vm.expectRevert("Invalid receipts root");
+        _harness.verify(beaconBlockRoot, proof);
+    }
+
     function testVerifyRevertSlotBoundaries() public {
         Execution.Proof memory proof = _makeBaseProof();
         // target == anchor

@@ -71,12 +71,15 @@ library SSZ {
     }
 
     /// @notice Verifies that a Merkle proof correctly connects a leaf to a root
+    /// @dev The proof must have exactly the depth of the generalized index: a shorter one cannot
+    /// be checked, and a longer one would carry siblings that are not checked.
     function isValidMerkleProof(
         bytes32 leaf,
         uint256 index,
         bytes32[] memory proof,
         bytes32 root
     ) internal pure returns (bool) {
+        if (proof.length != Math.log2(index)) return false;
         return restoreMerkleRoot(leaf, index, proof) == root;
     }
 }
