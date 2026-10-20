@@ -5,6 +5,7 @@ package proofs
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -132,6 +133,59 @@ func TestBuildReceiptProofTxNotInBlock(t *testing.T) {
 	client, _ := makeTestBlock(t, 2)
 	_, err := BuildReceiptProof(context.Background(), client, 100, common.HexToHash("0xdead"), 0)
 	require.ErrorContains(t, err, "not found in block")
+}
+
+// sepoliaBlockClient serves a real Sepolia block's header and receipts. Like a
+// node, it answers receipt requests only for the block's number or its real
+// hash.
+type sepoliaBlockClient struct {
+	header   *types.Header
+	receipts []*types.Receipt
+	number   uint64
+	hash     common.Hash
+}
+
+func (c *sepoliaBlockClient) HeaderByNumber(_ context.Context, _ *big.Int) (*types.Header, error) {
+	return c.header, nil
+}
+
+func (c *sepoliaBlockClient) BlockReceipts(_ context.Context, id rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
+	if number, ok := id.Number(); ok && uint64(number) == c.number {
+		return c.receipts, nil
+	}
+	if hash, ok := id.Hash(); ok && hash == c.hash {
+		return c.receipts, nil
+	}
+	return nil, fmt.Errorf("no block %s", id.String())
+}
+
+// Receipts must not be fetched by libevm's Header.Hash(): it ignores the
+// Prague and Amsterdam header fields, so for a Sepolia Gloas block it names a
+// block that does not exist. The proof must match the fixture's, which was
+// built by an independent MPT implementation.
+func TestBuildReceiptProofSepoliaBlock(t *testing.T) {
+	fixture := loadSepoliaFixture(t)
+	client := &sepoliaBlockClient{
+		number: fixture.Metadata.BlockNumber,
+		hash:   fixture.Metadata.BlockHash,
+	}
+	loadRPCResult(t, sepoliaBlockPath, &client.header)
+	loadRPCResult(t, sepoliaReceiptsPath, &client.receipts)
+
+	proof, err := BuildReceiptProof(
+		context.Background(), client, fixture.Metadata.BlockNumber, fixture.Metadata.TxHash, 0)
+	require.NoError(t, err)
+
+	expected := fixture.ReceiptProof
+	require.Equal(t, []byte(expected.Key), proof.Key)
+	require.Equal(t, []byte(expected.Value), proof.Value)
+	require.Len(t, proof.Proof, len(expected.Proof))
+	for i := range expected.Proof {
+		require.Equal(t, []byte(expected.Proof[i]), proof.Proof[i], "proof node %d", i)
+	}
+	require.Equal(t, expected.LogIndex, proof.LogIndex)
+	require.Equal(t, expected.ExpectedEmitter, proof.ExpectedEmitter)
+	require.Equal(t, expected.ExpectedTopic0, proof.ExpectedTopic0)
 }
 
 // A header whose receipts root doesn't match the block's receipts must error

@@ -63,10 +63,11 @@ func BuildReceiptProof(
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch header %d: %w", blockNumber, err)
 	}
-	// RequireCanonical=false: we want the receipts of exactly this header's block. Whether or not
-	// the block is canonical is already enforced by finality depth and by proof verification against
-	// a confirmed consensus anchor.
-	receipts, err := client.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(header.Hash(), false))
+	// Fetch the receipts by number, not by header.Hash(): libevm's header type ends at the Cancun
+	// fields, so its hash is wrong for Prague and later headers. A reorg between the two fetches
+	// cannot go unnoticed, since the receipts are checked against this header's receipts root below,
+	// and the block is final by the time its proof is verified against a confirmed consensus anchor.
+	receipts, err := client.BlockReceipts(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blockNumber)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch receipts for block %d: %w", blockNumber, err)
 	}
