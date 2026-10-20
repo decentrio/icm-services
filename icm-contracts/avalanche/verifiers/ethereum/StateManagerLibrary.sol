@@ -51,6 +51,15 @@ library Consensus {
 }
 
 library Execution {
+    using RLPReader for bytes;
+    using RLPReader for RLPReader.RLPItem;
+    using RLPReader for RLPReader.Iterator;
+
+    /**
+     * @notice Where the beacon chain keeps execution data. Before Gloas the beacon state holds the
+     * execution payload header; from Gloas (EIP-7732) it holds only the execution block hash, and
+     * the state's layout changes. The layout of a state is chosen by its slot, never by the prover.
+     */
     struct BeaconConfig {
         uint256 gIndexBlockStateRoot;
         uint256 gIndexExecRoot;
@@ -58,6 +67,12 @@ library Execution {
         uint256 stateRootsDepth;
         uint256 gIndexReceiptsRoot;
         uint256 stateRootsVectorSize;
+        // First slot of the Gloas fork, type(uint256).max while it is not scheduled.
+        uint256 gloasForkSlot;
+        // Generalized index of state_roots in the Gloas beacon state.
+        uint256 gIndexBaseStateRootsGloas;
+        // Generalized index of latest_block_hash in the Gloas beacon state.
+        uint256 gIndexLatestBlockHash;
     }
 
     /**
@@ -67,6 +82,10 @@ library Execution {
      * 2. History Check: Verifies the `targetBeaconState` exists within the `anchorBeaconState` historical state roots vector.
      * 3. Execution Check: Verifies the `targetExecutionHeader` root is included in the `targetBeaconState`.
      * 4. Receipts Check: Verifies the `targetReceiptsRoot` is included in the `targetExecutionHeader`.
+     * From Gloas, the target state holds only the execution block hash: `targetSlot` is the slot of
+     * the first beacon block that built on the execution payload, `targetExecutionHeaderRoot` is
+     * that state's `latest_block_hash`, and `executionHeaderRlp` is the execution header whose hash
+     * it is, from which the receipts root is read.
      */
     struct Proof {
         // The specific slot for the beacon block root we are using as the anchor
@@ -85,6 +104,8 @@ library Execution {
         // The Receipts Proof (Execution Header Root -> Receipts Root)
         bytes32 targetReceiptsRoot;
         bytes32[] targetReceiptsProof;
+        // From Gloas: the RLP-encoded execution header whose hash the target state holds
+        bytes executionHeaderRlp;
     }
 
     /**
@@ -95,12 +116,13 @@ library Execution {
      * 3. Execution check: Validates the execution payload header against the target beacon state.
      * 4. Receipts check: Validates the receipts root against the execution payload header.
      * @param proof The `ExecutionProof` struct containing the target/anchor slots, relevant roots, and all Merkle proofs required for the verification path.
+     * @return receiptsRoot The verified receipts root.
      */
     function verify(
         bytes32 trustedBeaconBlockRoot,
         Proof calldata proof,
         BeaconConfig storage config
-    ) internal view {
+    ) internal view returns (bytes32 receiptsRoot) {
         // Safety Check. Can only prove history within the state roots vector size.
         require(proof.targetSlot < proof.anchorSlot, "Target slot must be less than anchor slot");
         require(
@@ -118,8 +140,12 @@ library Execution {
         require(validAnchor, "Invalid anchor state root");
 
         // Calculate the specific G-Index for 'state_roots[targetSlot]' within the beacon state SSZ structure.
+        // The anchor state's layout is the one of the anchor slot's fork.
         uint256 vectorIndex = proof.targetSlot % config.stateRootsVectorSize;
-        uint256 targetGIndex = (config.gIndexBaseStateRoots << config.stateRootsDepth) + vectorIndex;
+        uint256 baseStateRoots = proof.anchorSlot >= config.gloasForkSlot
+            ? config.gIndexBaseStateRootsGloas
+            : config.gIndexBaseStateRoots;
+        uint256 targetGIndex = (baseStateRoots << config.stateRootsDepth) + vectorIndex;
 
         // History check: Prove that the target beacon state root is in the anchor beacon state's history using the G-index and the SSZ Merkle proof.
         // This is possible since beacon states contain a vector of historical state roots `state_roots` referencing the last 8192 slots.
@@ -130,6 +156,11 @@ library Execution {
             proof.anchorBeaconStateRoot
         );
         require(validBeacon, "Invalid target beacon state root");
+
+        if (proof.targetSlot >= config.gloasForkSlot) {
+            return _verifyGloasExecution(proof, config);
+        }
+        require(proof.executionHeaderRlp.length == 0, "Unexpected header RLP");
 
         // Execution check: Verify the execution header root is in the target beacon state.
         bool validExecutionHeader = SSZ.isValidMerkleProof(
@@ -148,6 +179,52 @@ library Execution {
             proof.targetExecutionHeaderRoot
         );
         require(validReceiptsRoot, "Invalid receipts root");
+        return proof.targetReceiptsRoot;
+    }
+
+    /**
+     * @notice The receipts root of an RLP-encoded execution header: item 5 in every fork, since
+     * forks only append fields.
+     */
+    function receiptsRootOf(
+        bytes memory headerRlp
+    ) internal pure returns (bytes32) {
+        RLPReader.RLPItem memory header = headerRlp.toRlpItem();
+        require(header.isList(), "Header is not a list");
+        RLPReader.Iterator memory fields = header.iterator();
+        for (uint256 i = 0; i < 5; i++) {
+            require(fields.hasNext(), "Header has too few fields");
+            fields.next();
+        }
+        require(fields.hasNext(), "Header has too few fields");
+        bytes memory receiptsRoot = fields.next().toBytes();
+        require(receiptsRoot.length == 32, "Invalid receipts root in header");
+        return bytes32(receiptsRoot);
+    }
+
+    /**
+     * @notice From Gloas: the target state's latest_block_hash is the hash of a canonical execution
+     * block, the header given hashes to it, and its receipts root is read from the header.
+     */
+    function _verifyGloasExecution(
+        Proof calldata proof,
+        BeaconConfig storage config
+    ) private view returns (bytes32) {
+        require(proof.targetReceiptsProof.length == 0, "Unexpected receipts proof");
+        bool validBlockHash = SSZ.isValidMerkleProof(
+            proof.targetExecutionHeaderRoot,
+            config.gIndexLatestBlockHash,
+            proof.targetExecutionHeaderProof,
+            proof.targetBeaconStateRoot
+        );
+        require(validBlockHash, "Invalid execution block hash proof");
+        require(
+            keccak256(proof.executionHeaderRlp) == proof.targetExecutionHeaderRoot,
+            "Header does not match block hash"
+        );
+        bytes32 receiptsRoot = receiptsRootOf(proof.executionHeaderRlp);
+        require(receiptsRoot == proof.targetReceiptsRoot, "Receipts root mismatch");
+        return receiptsRoot;
     }
 }
 

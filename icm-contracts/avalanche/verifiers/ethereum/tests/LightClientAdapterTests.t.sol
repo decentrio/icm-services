@@ -54,6 +54,9 @@ contract LightClientAdapterTest is Test {
 
     uint64 private constant _START_EPOCH = 1_000;
     uint256 private constant _GENESIS_TIME = 1_606_824_023;
+    uint256 private constant _SEPOLIA_CHAIN_ID = 11_155_111;
+    // GLOAS_FORK_EPOCH * SLOTS_PER_EPOCH on Sepolia.
+    uint256 private constant _SEPOLIA_GLOAS_FORK_SLOT = 353_024 * 32;
 
     function testVerifiesARealMainnetLogAgainstTheSourcesRoot() public {
         Fixture memory f = _fixture();
@@ -72,6 +75,132 @@ contract LightClientAdapterTest is Test {
         bytes memory logData = adapter.verifyLogAndExtract(f.execProof, f.logProof);
         // A Transfer log carries the amount as its only non-indexed field.
         assertEq(logData.length, 32);
+    }
+
+    /**
+     * @dev A real Sepolia log after Gloas, which took the execution payload header out of the
+     * beacon state: the execution block is reached through the state of the first block that built
+     * on its payload, whose latest_block_hash is the hash of the execution header given in full.
+     */
+    function testVerifiesARealSepoliaLogAfterGloas() public {
+        Fixture memory f = _gloasFixture();
+        TestBeaconRootSource source = new TestBeaconRootSource();
+        source.setRoot(f.execProof.anchorSlot, f.anchorRoot);
+        LightClientAdapter adapter =
+            new LightClientAdapter(_SEPOLIA_CHAIN_ID, _sepoliaConfig(), source);
+
+        string memory json = vm.readFile("tests/testdata/sepolia_gloas_fixture.json");
+        vm.expectEmit(true, true, true, true, address(adapter));
+        emit EthereumLogVerifier.ZKEventImported(
+            _SEPOLIA_CHAIN_ID,
+            vm.parseJsonUint(json, ".metadata.targetSlot"),
+            vm.parseJsonAddress(json, ".receiptProof.expectedEmitter"),
+            vm.parseJsonBytes32(json, ".metadata.blockHash"),
+            0
+        );
+        bytes memory logData = adapter.verifyLogAndExtract(f.execProof, f.logProof);
+        // The transfer moved 0.5 USDC (6 decimals).
+        assertEq(abi.decode(logData, (uint256)), 500_000);
+    }
+
+    /// @dev The layout is the one of each slot's fork: a Gloas proof does not verify on a chain
+    /// where Gloas is not scheduled.
+    function testRejectsAGloasProofWhereGloasIsNotScheduled() public {
+        Fixture memory f = _gloasFixture();
+        LightClientAdapter adapter = _sepoliaAdapter(f, _fuluConfig());
+
+        vm.expectRevert("Invalid target beacon state root");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    /// @dev ...nor a Fulu proof where its slots are in Gloas. Its branch is shorter than the Gloas
+    /// index's depth, which must revert like any other invalid branch.
+    function testRejectsAFuluProofWhereItsSlotsAreInGloas() public {
+        Fixture memory f = _fixture();
+        Execution.BeaconConfig memory config = _fuluConfig();
+        config.gloasForkSlot = 0;
+        TestBeaconRootSource source = new TestBeaconRootSource();
+        source.setRoot(f.execProof.anchorSlot, f.anchorRoot);
+        LightClientAdapter adapter = new LightClientAdapter(1, config, source);
+
+        vm.expectRevert("Invalid target beacon state root");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    function testRejectsAGloasBlockHashNotInTheTargetState() public {
+        Fixture memory f = _gloasFixture();
+        LightClientAdapter adapter = _sepoliaAdapter(f, _sepoliaConfig());
+        f.execProof.targetExecutionHeaderProof[0] ^= bytes32(uint256(1));
+
+        vm.expectRevert("Invalid execution block hash proof");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    function testRejectsAHeaderThatIsNotTheBlockHashs() public {
+        Fixture memory f = _gloasFixture();
+        LightClientAdapter adapter = _sepoliaAdapter(f, _sepoliaConfig());
+        f.execProof.executionHeaderRlp[200] ^= 0x01;
+
+        vm.expectRevert("Header does not match block hash");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    /**
+     * @dev In Gloas the state at the payload's own slot holds the parent's block hash: the payload
+     * is only known to be included once a later block builds on it. A proof through that state
+     * proves the parent block, whose receipts root does not hold the log.
+     */
+    function testRejectsTheStateOfThePayloadsOwnSlot() public {
+        Fixture memory f = _gloasFixture();
+        LightClientAdapter adapter = _sepoliaAdapter(f, _sepoliaConfig());
+        string memory json = vm.readFile("tests/testdata/sepolia_gloas_fixture.json");
+        string memory s = ".negative.wrongTargetSlotIsPayloadSlot";
+        f.execProof.targetSlot = uint64(vm.parseJsonUint(json, string.concat(s, ".targetSlot")));
+        f.execProof.targetBeaconStateRoot =
+            vm.parseJsonBytes32(json, string.concat(s, ".targetBeaconStateRoot"));
+        f.execProof.targetBeaconStateProof =
+            vm.parseJsonBytes32Array(json, string.concat(s, ".targetBeaconStateProof"));
+        f.execProof.targetExecutionHeaderRoot =
+            vm.parseJsonBytes32(json, string.concat(s, ".executionBlockHash"));
+        f.execProof.targetExecutionHeaderProof =
+            vm.parseJsonBytes32Array(json, string.concat(s, ".executionBlockHashProof"));
+
+        // The target's own header does not hash to the parent's block hash.
+        vm.expectRevert("Header does not match block hash");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+
+        // The parent's header does, but its receipts root is not the claimed one...
+        f.execProof.executionHeaderRlp =
+            vm.parseJsonBytes(json, string.concat(s, ".parentHeaderRlp"));
+        vm.expectRevert("Receipts root mismatch");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+
+        // ...and the log's receipt is not under the parent's receipts root.
+        f.execProof.targetReceiptsRoot = Execution.receiptsRootOf(f.execProof.executionHeaderRlp);
+        vm.expectRevert();
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    /// @dev A Gloas proof has no receipts branch: the receipts root comes from the header.
+    function testRejectsAGloasProofWithAReceiptsBranch() public {
+        Fixture memory f = _gloasFixture();
+        LightClientAdapter adapter = _sepoliaAdapter(f, _sepoliaConfig());
+        f.execProof.targetReceiptsProof = new bytes32[](1);
+
+        vm.expectRevert("Unexpected receipts proof");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
+    }
+
+    /// @dev A Fulu proof has no execution header: the receipts root comes from its branch.
+    function testRejectsAFuluProofWithAnExecutionHeader() public {
+        Fixture memory f = _fixture();
+        TestBeaconRootSource source = new TestBeaconRootSource();
+        source.setRoot(f.execProof.anchorSlot, f.anchorRoot);
+        LightClientAdapter adapter = new LightClientAdapter(1, _fuluConfig(), source);
+        f.execProof.executionHeaderRlp = hex"c0";
+
+        vm.expectRevert("Unexpected header RLP");
+        adapter.verifyLogAndExtract(f.execProof, f.logProof);
     }
 
     function testRejectsAnAnchorSlotTheSourceHasNoRootFor() public {
@@ -140,6 +269,15 @@ contract LightClientAdapterTest is Test {
         new LightClientAdapter(1, _fuluConfig(), IBeaconRootSource(address(0)));
     }
 
+    function _sepoliaAdapter(
+        Fixture memory f,
+        Execution.BeaconConfig memory config
+    ) private returns (LightClientAdapter) {
+        TestBeaconRootSource source = new TestBeaconRootSource();
+        source.setRoot(f.execProof.anchorSlot, f.anchorRoot);
+        return new LightClientAdapter(_SEPOLIA_CHAIN_ID, config, source);
+    }
+
     function _stateManager() private returns (ZKStateManager) {
         vm.warp(_GENESIS_TIME + uint256(_START_EPOCH + 2) * 32 * 12);
         Consensus.State memory start;
@@ -185,7 +323,8 @@ contract LightClientAdapterTest is Test {
             targetReceiptsRoot: vm.parseJsonBytes32(json, ".executionProof.targetReceiptsRoot"),
             targetReceiptsProof: vm.parseJsonBytes32Array(
                 json, ".executionProof.targetReceiptsProof"
-            )
+            ),
+            executionHeaderRlp: ""
         });
         f.logProof = LogReceipt.Proof({
             proof: vm.parseJsonBytesArray(json, ".receiptProof.proof"),
@@ -197,15 +336,69 @@ contract LightClientAdapterTest is Test {
         });
     }
 
-    /// @dev Generalized indices of the Fulu beacon state and block layouts.
-    function _fuluConfig() private pure returns (Execution.BeaconConfig memory) {
+    /// @dev The Sepolia fixture after Gloas: a USDC transfer log and its proofs.
+    function _gloasFixture() private view returns (Fixture memory f) {
+        string memory json = vm.readFile("tests/testdata/sepolia_gloas_fixture.json");
+        f.anchorRoot = vm.parseJsonBytes32(json, ".anchorBeaconBlockRoot");
+        f.execProof = Execution.Proof({
+            anchorSlot: uint64(vm.parseJsonUint(json, ".executionProof.anchorSlot")),
+            targetSlot: uint64(vm.parseJsonUint(json, ".executionProof.targetSlot")),
+            anchorBeaconStateRoot: vm.parseJsonBytes32(
+                json, ".executionProof.anchorBeaconStateRoot"
+            ),
+            anchorBeaconStateProof: vm.parseJsonBytes32Array(
+                json, ".executionProof.anchorBeaconStateProof"
+            ),
+            targetBeaconStateRoot: vm.parseJsonBytes32(
+                json, ".executionProof.targetBeaconStateRoot"
+            ),
+            targetBeaconStateProof: vm.parseJsonBytes32Array(
+                json, ".executionProof.targetBeaconStateProof"
+            ),
+            targetExecutionHeaderRoot: vm.parseJsonBytes32(
+                json, ".executionProof.executionBlockHash"
+            ),
+            targetExecutionHeaderProof: vm.parseJsonBytes32Array(
+                json, ".executionProof.executionBlockHashProof"
+            ),
+            targetReceiptsRoot: vm.parseJsonBytes32(json, ".executionProof.receiptsRoot"),
+            targetReceiptsProof: new bytes32[](0),
+            executionHeaderRlp: vm.parseJsonBytes(json, ".executionProof.executionHeaderRlp")
+        });
+        f.logProof = LogReceipt.Proof({
+            proof: vm.parseJsonBytesArray(json, ".receiptProof.proof"),
+            key: vm.parseJsonBytes(json, ".receiptProof.key"),
+            value: vm.parseJsonBytes(json, ".receiptProof.value"),
+            logIndex: vm.parseJsonUint(json, ".receiptProof.logIndex"),
+            expectedEmitter: vm.parseJsonAddress(json, ".receiptProof.expectedEmitter"),
+            expectedTopic0: vm.parseJsonBytes32(json, ".receiptProof.expectedTopic0")
+        });
+    }
+
+    /// @dev Generalized indices of the Fulu beacon state and block layouts; Gloas not scheduled.
+    function _fuluConfig() private pure returns (Execution.BeaconConfig memory config) {
+        config = _layouts();
+        config.gloasForkSlot = type(uint256).max;
+    }
+
+    /// @dev Sepolia: the Fulu layouts, and Gloas's from its fork.
+    function _sepoliaConfig() private pure returns (Execution.BeaconConfig memory config) {
+        config = _layouts();
+        config.gloasForkSlot = _SEPOLIA_GLOAS_FORK_SLOT;
+    }
+
+    /// @dev Generalized indices of the Fulu and Gloas beacon state and block layouts.
+    function _layouts() private pure returns (Execution.BeaconConfig memory) {
         return Execution.BeaconConfig({
             gIndexBlockStateRoot: 11,
             gIndexExecRoot: 88,
             gIndexBaseStateRoots: 70,
             stateRootsDepth: 13,
             gIndexReceiptsRoot: 35,
-            stateRootsVectorSize: 8192
+            stateRootsVectorSize: 8192,
+            gloasForkSlot: 0,
+            gIndexBaseStateRootsGloas: 353,
+            gIndexLatestBlockHash: 2947
         });
     }
 }

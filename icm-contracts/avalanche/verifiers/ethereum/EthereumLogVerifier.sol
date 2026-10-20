@@ -59,8 +59,8 @@ abstract contract EthereumLogVerifier {
     ) external returns (bytes memory) {
         bytes32 anchorRoot = _beaconRoot(execProof.anchorSlot);
         require(anchorRoot != UNDEFINED_ROOT, "Anchor slot is undefined");
-        Execution.verify(anchorRoot, execProof, _beaconConfig);
-        bytes memory logData = Receipt.verifyAndExtractLog(execProof.targetReceiptsRoot, logProof);
+        bytes32 receiptsRoot = Execution.verify(anchorRoot, execProof, _beaconConfig);
+        bytes memory logData = Receipt.verifyAndExtractLog(receiptsRoot, logProof);
         emit ZKEventImported(
             sourceChainId,
             execProof.targetSlot,

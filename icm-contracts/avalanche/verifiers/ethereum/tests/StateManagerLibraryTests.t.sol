@@ -21,8 +21,17 @@ contract ExecutionHarness {
         return _config;
     }
 
-    function verify(bytes32 trustedBeaconBlockRoot, Execution.Proof calldata proof) external view {
-        Execution.verify(trustedBeaconBlockRoot, proof, _config);
+    function verify(
+        bytes32 trustedBeaconBlockRoot,
+        Execution.Proof calldata proof
+    ) external view returns (bytes32) {
+        return Execution.verify(trustedBeaconBlockRoot, proof, _config);
+    }
+
+    function receiptsRootOf(
+        bytes memory headerRlp
+    ) external pure returns (bytes32) {
+        return Execution.receiptsRootOf(headerRlp);
     }
 }
 
@@ -36,7 +45,10 @@ contract ExecutionTest is Test {
         gIndexBaseStateRoots: 38,
         stateRootsDepth: 13,
         gIndexReceiptsRoot: 1795,
-        stateRootsVectorSize: 8192
+        stateRootsVectorSize: 8192,
+        gloasForkSlot: type(uint256).max,
+        gIndexBaseStateRootsGloas: 353,
+        gIndexLatestBlockHash: 2947
     });
 
     function setUp() public {
@@ -98,6 +110,47 @@ contract ExecutionTest is Test {
         _harness.verify(beaconBlockRoot, proof);
     }
 
+    /**
+     * @notice After Gloas the anchor state has the Gloas layout, while a target before the fork
+     * keeps the Fulu one: each leg uses the layout of its own slot.
+     */
+    function testVerifyAGloasAnchorAndAFuluTarget() public {
+        Execution.BeaconConfig memory config = _defaultConfig;
+        config.gloasForkSlot = 1000;
+        _harness.setConfig(config);
+        bytes32 receiptsRoot = bytes32(uint256(0xCAFE));
+
+        (Execution.Proof memory proof, bytes32 beaconBlockRoot) =
+            _buildFullProof(receiptsRoot, 999, 1000);
+        // Built at the Fulu index of state_roots, it does not verify in a Gloas anchor state.
+        vm.expectRevert("Invalid target beacon state root");
+        _harness.verify(beaconBlockRoot, proof);
+
+        (proof, beaconBlockRoot) =
+            _buildProofWithHistoryBase(receiptsRoot, 999, 1000, config.gIndexBaseStateRootsGloas);
+        assertEq(_harness.verify(beaconBlockRoot, proof), receiptsRoot);
+    }
+
+    function testReceiptsRootOfRejectsMalformedHeaders() public {
+        bytes[] memory five = new bytes[](5);
+        for (uint256 i = 0; i < five.length; i++) {
+            five[i] = _rlpBytes32(bytes32(i));
+        }
+        vm.expectRevert("Header has too few fields");
+        _harness.receiptsRootOf(_rlpList(five));
+
+        vm.expectRevert("Header is not a list");
+        _harness.receiptsRootOf(_rlpBytes32(bytes32(uint256(1))));
+
+        bytes[] memory shortRoot = new bytes[](6);
+        for (uint256 i = 0; i < shortRoot.length; i++) {
+            shortRoot[i] = _rlpBytes32(bytes32(i));
+        }
+        shortRoot[5] = hex"8401020304";
+        vm.expectRevert("Invalid receipts root in header");
+        _harness.receiptsRootOf(_rlpList(shortRoot));
+    }
+
     function testVerifyRevertSlotBoundaries() public {
         Execution.Proof memory proof = _makeBaseProof();
         // target == anchor
@@ -155,13 +208,29 @@ contract ExecutionTest is Test {
     /**
      * @notice Invalid slot relationships should always revert.
      */
-    function testFuzzVerifyRevertInvalidSlots(uint64 target, uint64 anchor) public {
+    function testFuzzVerifyRevertInvalidSlots(
+        uint64 target,
+        uint64 anchor
+    ) public {
         vm.assume(target >= anchor);
         Execution.Proof memory proof = _makeBaseProof();
         proof.targetSlot = target;
         proof.anchorSlot = anchor;
         vm.expectRevert();
         _harness.verify(bytes32(uint256(0xBEEF)), proof);
+    }
+
+    /**
+     * @notice The receipts root is item 5 of the execution header's RLP list.
+     */
+    function testReceiptsRootOfReadsTheSixthHeaderField() public view {
+        bytes32 receiptsRoot = keccak256("receipts");
+        bytes[] memory fields = new bytes[](7);
+        for (uint256 i = 0; i < fields.length; i++) {
+            fields[i] = _rlpBytes32(keccak256(abi.encode(i)));
+        }
+        fields[5] = _rlpBytes32(receiptsRoot);
+        assertEq(_harness.receiptsRootOf(_rlpList(fields)), receiptsRoot);
     }
 
     /**
@@ -253,10 +322,33 @@ contract ExecutionTest is Test {
             targetExecutionHeaderRoot: execHeaderRoot,
             targetExecutionHeaderProof: execProof,
             targetReceiptsRoot: receiptsRoot,
-            targetReceiptsProof: receiptsProof
+            targetReceiptsProof: receiptsProof,
+            executionHeaderRlp: ""
         });
 
         beaconBlockRoot = blockRoot;
+    }
+
+    function _buildProofWithHistoryBase(
+        bytes32 receiptsRoot,
+        uint64 targetSlot,
+        uint64 anchorSlot,
+        uint256 historyBase
+    ) internal view returns (Execution.Proof memory proof, bytes32 beaconBlockRoot) {
+        Execution.BeaconConfig memory config = _harness.getConfig();
+        proof.targetSlot = targetSlot;
+        proof.anchorSlot = anchorSlot;
+        proof.targetReceiptsRoot = receiptsRoot;
+        (proof.targetExecutionHeaderRoot, proof.targetReceiptsProof) =
+            _buildProof(receiptsRoot, config.gIndexReceiptsRoot);
+        (proof.targetBeaconStateRoot, proof.targetExecutionHeaderProof) =
+            _buildProof(proof.targetExecutionHeaderRoot, config.gIndexExecRoot);
+        (proof.anchorBeaconStateRoot, proof.targetBeaconStateProof) = _buildProof(
+            proof.targetBeaconStateRoot,
+            (historyBase << config.stateRootsDepth) + targetSlot % config.stateRootsVectorSize
+        );
+        (beaconBlockRoot, proof.anchorBeaconStateProof) =
+            _buildProof(proof.anchorBeaconStateRoot, config.gIndexBlockStateRoot);
     }
 
     function _historyGIndex(
@@ -305,7 +397,31 @@ contract ExecutionTest is Test {
             targetExecutionHeaderRoot: bytes32(uint256(0xC3)),
             targetExecutionHeaderProof: dummyBranch,
             targetReceiptsRoot: bytes32(uint256(0xD4)),
-            targetReceiptsProof: dummyBranch
+            targetReceiptsProof: dummyBranch,
+            executionHeaderRlp: ""
         });
+    }
+
+    /// @dev RLP of a 32-byte string.
+    function _rlpBytes32(
+        bytes32 value
+    ) internal pure returns (bytes memory) {
+        return abi.encodePacked(uint8(0x80 + 32), value);
+    }
+
+    /// @dev RLP of a list of RLP items, whose payload is under 64 KiB.
+    function _rlpList(
+        bytes[] memory items
+    ) internal pure returns (bytes memory payload) {
+        for (uint256 i = 0; i < items.length; i++) {
+            payload = bytes.concat(payload, items[i]);
+        }
+        if (payload.length < 56) {
+            return bytes.concat(bytes1(uint8(0xc0 + payload.length)), payload);
+        }
+        if (payload.length < 256) {
+            return bytes.concat(hex"f8", bytes1(uint8(payload.length)), payload);
+        }
+        return bytes.concat(hex"f9", bytes2(uint16(payload.length)), payload);
     }
 }
