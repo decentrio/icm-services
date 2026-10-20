@@ -233,6 +233,23 @@ func TestProveAgainst(t *testing.T) {
 	require.ErrorContains(t, err, "does not verify against expected root")
 }
 
+// The Gloas state tree is progressive, so its leaves sit at different depths
+// and a gindex can point below a leaf. That must be an error, not a panic in
+// fastssz's Prove.
+func TestProveAgainstBelowALeaf(t *testing.T) {
+	leaf := func(b byte) *ssz.Node { return ssz.LeafFromBytes(common.Hash{b}.Bytes()) }
+	tree := ssz.NewNodeWithLR(leaf(1), ssz.NewNodeWithLR(leaf(2), leaf(3)))
+	root := common.BytesToHash(tree.Hash())
+
+	proof, err := proveAgainst(tree, 6, root)
+	require.NoError(t, err)
+	require.Equal(t, common.Hash{2}.Bytes(), proof.Leaf)
+
+	// Gindex 4 is below the leaf at gindex 2.
+	_, err = proveAgainst(tree, 4, root)
+	require.ErrorContains(t, err, "failed to prove gindex 4")
+}
+
 func TestToHash32Slice(t *testing.T) {
 	valid := [][]byte{make([]byte, 32), make([]byte, 32)}
 	valid[0][31] = 0xaa

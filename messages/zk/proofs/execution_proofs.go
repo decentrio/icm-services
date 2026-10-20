@@ -294,6 +294,11 @@ func toHash32Slice(hashes [][]byte) ([][32]byte, error) {
 // proveAgainst computes the SSZ Merkle proof for the provided gIndex
 // and verifies it against the supplied expectedRoot.
 func proveAgainst(node *ssz.Node, gIndex int, expectedRoot common.Hash) (*ssz.Proof, error) {
+	// fastssz's Prove panics on a gindex below a leaf, which progressive trees
+	// make possible, so look the node up first.
+	if _, err := node.Get(gIndex); err != nil {
+		return nil, fmt.Errorf("failed to prove gindex %d: %w", gIndex, err)
+	}
 	proof, err := node.Prove(gIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prove gindex %d: %w", gIndex, err)
