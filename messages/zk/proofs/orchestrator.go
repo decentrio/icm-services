@@ -85,7 +85,7 @@ func (b *ProofBuilder) BuildExecutionProofForSlots(
 		return nil, fmt.Errorf("anchor block at slot %d is a %q object, expected %q",
 			anchorSlot, block.Fork, beacon.ForkFulu)
 	}
-	anchorBlockTree, anchorStateRoot, err := beacon.ParseBlockTree(block.Data)
+	anchorBlockTree, anchorStateRoot, err := beacon.ParseBlockTree(block)
 	if err != nil {
 		return nil, err
 	}

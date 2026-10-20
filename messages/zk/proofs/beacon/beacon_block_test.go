@@ -6,6 +6,7 @@
 package beacon
 
 import (
+	"os"
 	"testing"
 
 	"github.com/OffchainLabs/go-bitfield"
@@ -15,6 +16,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +33,7 @@ func TestParseBlockTreeMatchesTypedRoot(t *testing.T) {
 	blockSSZ, err := signedBlock.MarshalSSZ()
 	require.NoError(t, err)
 
-	tree, stateRoot, err := ParseBlockTree(blockSSZ)
+	tree, stateRoot, err := ParseBlockTree(&SSZObject{Fork: ForkFulu, Data: blockSSZ})
 	require.NoError(t, err)
 	require.Equal(t, expectedRoot[:], tree.Hash())
 	require.Equal(t, [32]byte(signedBlock.Message.StateRoot), stateRoot)
@@ -41,10 +43,52 @@ func TestParseBlockTreeMatchesTypedRoot(t *testing.T) {
 	require.Equal(t, signedBlock.Message.StateRoot[:], leaf.Hash())
 }
 
-// Malformed bytes must be rejected at deserialization.
+// Real Sepolia Gloas blocks must give the block roots and state roots that the
+// Sepolia fixture records (anchorBeaconBlockRoot and its header's state_root,
+// and beaconBlocks.c).
+func TestParseBlockTreeSepoliaGloasBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		path      string
+		root      string
+		stateRoot string
+	}{
+		{
+			path:      "../testdata/sepolia/beacon_block_11397760.ssz",
+			root:      "0xb5101888b495fa63efc0a0dc9ca161b2dd02ac18d516d3877e856b9270c1cd67",
+			stateRoot: "0xf11a57a39171758f0b38af98fed5d231e1f5239189961b7b9a46d92c157ca157",
+		},
+		{
+			path:      "../testdata/sepolia/beacon_block_11397715.ssz",
+			root:      "0x9b11a47e73a8605a73bd41e18ee5001d5aee4fa4c3b770b476b0414fff52bf28",
+			stateRoot: "0x09626e51cae8c681dc7a8c116df21147bab677d9e9d0ffbd07ac633d8085753b",
+		},
+	} {
+		blockSSZ, err := os.ReadFile(tc.path)
+		require.NoError(t, err)
+
+		tree, stateRoot, err := ParseBlockTree(&SSZObject{Fork: ForkGloas, Data: blockSSZ})
+		require.NoError(t, err, tc.path)
+		require.Equal(t, common.HexToHash(tc.root).Bytes(), tree.Hash(), tc.path)
+		require.Equal(t, common.HexToHash(tc.stateRoot), common.Hash(stateRoot), tc.path)
+
+		leaf, err := tree.Get(testGIndexBlockStateRoot)
+		require.NoError(t, err)
+		require.Equal(t, stateRoot[:], leaf.Hash(), tc.path)
+	}
+}
+
+// Malformed bytes must be rejected at deserialization, for every fork.
 func TestParseBlockTreeRejectsGarbage(t *testing.T) {
-	_, _, err := ParseBlockTree([]byte{0x01, 0x02, 0x03})
-	require.ErrorContains(t, err, "failed to deserialize beacon block")
+	for _, fork := range []Fork{ForkFulu, ForkGloas} {
+		_, _, err := ParseBlockTree(&SSZObject{Fork: fork, Data: []byte{0x01, 0x02, 0x03}})
+		require.ErrorContains(t, err, "failed to deserialize beacon block", "fork %s", fork)
+	}
+}
+
+// A block of a fork this package cannot decode must be rejected.
+func TestParseBlockTreeRejectsUnknownFork(t *testing.T) {
+	_, _, err := ParseBlockTree(&SSZObject{Fork: "electra", Data: []byte{0x01}})
+	require.ErrorContains(t, err, `unsupported consensus fork "electra"`)
 }
 
 // minimalSignedBeaconBlock builds the smallest signed block attestantio will
