@@ -128,6 +128,10 @@ var fuluBeaconConfig = zkstatemanager.ExecutionBeaconConfig{
 	StateRootsDepth:      big.NewInt(13),
 	GIndexReceiptsRoot:   big.NewInt(35),
 	StateRootsVectorSize: big.NewInt(8192),
+	// Gloas is not scheduled on mainnet: every slot keeps the Fulu layout.
+	GloasForkSlot:             new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)),
+	GIndexBaseStateRootsGloas: big.NewInt(353),
+	GIndexLatestBlockHash:     big.NewInt(2947),
 }
 
 // ZKAdapterVerifier tests the full ZKAdapter verification flow:

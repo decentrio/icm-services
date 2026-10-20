@@ -114,8 +114,11 @@ struct Proof {
     bytes32[] targetExecutionHeaderProof;
     bytes32 targetReceiptsRoot;           // execution header -> receipts root
     bytes32[] targetReceiptsProof;
+    bytes executionHeaderRlp;             // from Gloas: the execution header, RLP-encoded
 }
 ```
+
+From Gloas (EIP-7732), the beacon state no longer holds the execution payload header, only the execution block hash (`latest_block_hash`). For a target slot at or after the `gloasForkSlot` of the `BeaconConfig`, `targetSlot` is the slot of the first beacon block that built on the execution payload, `targetExecutionHeaderRoot` is that state's `latest_block_hash`, and `executionHeaderRlp` is the execution header, whose keccak256 must equal it. The receipts root is read from the header, so `targetReceiptsProof` is empty. Each state's layout is chosen by its slot, never by the prover.
 
 `Receipt.Proof` proves a specific log lives inside that receipts root:
 
@@ -133,7 +136,7 @@ struct Proof {
 This is the entry point that proves a specific log was emitted on the source chain. It performs two verifications:
 
 1. **Execution verification.** It looks up the trusted beacon block root for `execProof.anchorSlot` in the `_allowedBeaconBlocks` state mapping (reverting if that slot has not been confirmed). It then calls `Execution.verify` to link the claimed `targetReceiptsRoot` back to that anchor root, traversing from the beacon layer to the execution layer via Merkle inclusion proofs.
-2. **Log verification.** It calls `Receipt.verifyAndExtractLog` against the now-verified `targetReceiptsRoot` to prove inclusion of the receipt and its log, and returns the raw, non-indexed `logData`.
+2. **Log verification.** It calls `Receipt.verifyAndExtractLog` against the receipts root `Execution.verify` returns to prove inclusion of the receipt and its log, and returns the raw, non-indexed `logData`.
 
 On success it emits `ZKEventImported` and returns `logData` to the caller; the caller is responsible for decoding and interpreting that data.
 
