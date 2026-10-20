@@ -11,6 +11,7 @@ import (
 	electra "github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ava-labs/libevm/common"
 	ssz "github.com/ferranbt/fastssz"
 )
 
@@ -68,6 +69,21 @@ func parseBlockHeader(block *SSZObject) (*phase0.BeaconBlockHeader, error) {
 	default:
 		return nil, fmt.Errorf("unsupported consensus fork %q for beacon block", block.Fork)
 	}
+}
+
+// BidParentBlockHash deserializes a Gloas SignedBeaconBlock and returns the
+// parent_block_hash of its execution payload bid: the execution block the
+// block builds on. A block whose bid builds on a payload marks that payload
+// FULL, and its post-state's latest_block_hash is that payload's block hash.
+func BidParentBlockHash(block *SSZObject) (common.Hash, error) {
+	if block.Fork != ForkGloas {
+		return common.Hash{}, fmt.Errorf("beacon block of fork %q has no execution payload bid", block.Fork)
+	}
+	var signedBlock gloas.SignedBeaconBlock
+	if err := signedBlock.UnmarshalSSZ(block.Data); err != nil {
+		return common.Hash{}, fmt.Errorf("failed to deserialize beacon block: %w", err)
+	}
+	return common.Hash(signedBlock.Message.Body.SignedExecutionPayloadBid.Message.ParentBlockHash), nil
 }
 
 func blockHeader(
