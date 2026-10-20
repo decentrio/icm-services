@@ -31,6 +31,9 @@ type sepoliaFixture struct {
 		BlockNumber uint64      `json:"blockNumber"`
 		BlockHash   common.Hash `json:"blockHash"`
 	} `json:"metadata"`
+	ExecutionProof struct {
+		ExecutionHeaderRlp hexutil.Bytes `json:"executionHeaderRlp"`
+	} `json:"executionProof"`
 	ReceiptProof struct {
 		Proof           []hexutil.Bytes `json:"proof"`
 		Key             hexutil.Bytes   `json:"key"`
