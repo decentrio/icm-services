@@ -10,6 +10,8 @@ import (
 
 	zkadapter "github.com/ava-labs/icm-services/abi-bindings/go/verifiers/ethereum/ZKAdapter"
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
+	"github.com/ava-labs/libevm/rlp"
 	ssz "github.com/ferranbt/fastssz"
 )
 
@@ -37,6 +39,34 @@ const (
 	// can prove any slot within this many slots behind it.
 	StateRootsVectorSize = 8192
 )
+
+// Gloas generalized indices into the beacon state tree. Gloas makes the
+// BeaconState a progressive container (EIP-7688), which moves its fields'
+// gindices, and replaces latest_execution_payload_header with
+// latest_block_hash. BeaconBlock is unchanged, so gIndexBlockStateRoot holds.
+// Like the Fulu constants, these must match the contract-level deployed config.
+const (
+	// gIndexBaseStateRootsGloas locates the state_roots vector within a Gloas
+	// BeaconState.
+	gIndexBaseStateRootsGloas = 353
+	// gIndexLatestBlockHash locates latest_block_hash within a Gloas
+	// BeaconState.
+	gIndexLatestBlockHash = 2947
+	// headerReceiptsRootIndex is receipts_root's position in the execution
+	// header's RLP list, the same in every fork.
+	headerReceiptsRootIndex = 5
+)
+
+// ExecutionProof is the contract's Execution.Proof: the generated binding's
+// fields plus the execution header's RLP encoding, which Gloas proofs carry
+// and Fulu proofs leave empty.
+//
+// TODO: Return zkadapter.ExecutionProof directly once the regenerated
+// bindings carry ExecutionHeaderRlp.
+type ExecutionProof struct {
+	zkadapter.ExecutionProof
+	ExecutionHeaderRlp []byte
+}
 
 // BuildExecutionProof builds the four SSZ Merkle proofs that the ZKAdapter's
 // Execution.verify consumes, returning the generated binding struct
@@ -132,6 +162,120 @@ func BuildExecutionProof(
 		TargetReceiptsRoot:         common.BytesToHash(receiptsProof.Leaf),
 		TargetReceiptsProof:        receiptsProofHashes,
 	}, nil
+}
+
+// BuildGloasExecutionProof builds the execution proof for a Gloas target,
+// mirroring the contract's Gloas verification flow. Under Gloas the beacon
+// state commits only to the execution block hash, so the last SSZ proof ends
+// there and the header itself links the hash to the receipts root:
+//
+//	Chain of trust: Trusted Beacon Block -> Anchor Beacon State -> Target Beacon State -> Execution Block Hash -> Execution Header -> Receipts Root
+//	1. Anchor check: Validates an anchor beacon state against a trusted block root.
+//	2. History check: Validates the target beacon state against the anchor beacon state's `state_roots` history vector.
+//	3. Block hash check: Validates `latest_block_hash` against the target beacon state.
+//	4. Header check: Validates that the execution header RLP hashes to the block hash, then reads its receipts root.
+//
+// The target slot is c, the slot of the beacon block that built on the
+// payload, not the payload's own slot (see locateCommittingSlot). The proof's
+// header fields carry the Gloas meanings: TargetExecutionHeaderRoot is the
+// execution block hash, and TargetReceiptsProof is empty.
+//
+//nolint:lll
+func BuildGloasExecutionProof(
+	anchorBlock *ssz.Node,
+	anchorState *ssz.Node,
+	targetState *ssz.Node,
+	headerRLP []byte,
+	anchorBlockRoot common.Hash,
+	anchorSlot uint64,
+	targetSlot uint64,
+) (*ExecutionProof, error) {
+	// Safety check
+	if err := validateSlotWindow(anchorSlot, targetSlot); err != nil {
+		return nil, err
+	}
+
+	// 1. Anchor state proof: trusted anchor beacon block root -> anchor beacon state root.
+	anchorStateProof, err := proveAgainst(anchorBlock, gIndexBlockStateRoot, anchorBlockRoot)
+	if err != nil {
+		return nil, fmt.Errorf("anchor state proof generation failed: %w", err)
+	}
+	anchorStateRoot := common.BytesToHash(anchorStateProof.Leaf)
+
+	// 2. History proof: anchor beacon state root -> target beacon state root, at
+	// 'state_roots[targetSlot]' in the Gloas state layout.
+	vectorIndex := int(targetSlot % StateRootsVectorSize)
+	targetGIndex := (gIndexBaseStateRootsGloas << stateRootsDepth) + vectorIndex
+	targetStateProof, err := proveAgainst(anchorState, targetGIndex, anchorStateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("history proof generation failed: %w", err)
+	}
+	targetStateRoot := common.BytesToHash(targetStateProof.Leaf)
+
+	// 3. Block hash proof: target beacon state root -> execution block hash.
+	blockHashProof, err := proveAgainst(targetState, gIndexLatestBlockHash, targetStateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("execution block hash proof generation failed: %w", err)
+	}
+	blockHash := common.BytesToHash(blockHashProof.Leaf)
+
+	// 4. Header check: the header must hash to the proven block hash, which
+	// binds its receipts root to the chain of trust.
+	if got := crypto.Keccak256Hash(headerRLP); got != blockHash {
+		return nil, fmt.Errorf("execution header hashes to %s and does not hash to the proven execution block hash %s",
+			got, blockHash)
+	}
+	receiptsRoot, err := headerReceiptsRoot(headerRLP)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert proof siblings to the contract's bytes32[] type representation.
+	anchorProofHashes, err := toHash32Slice(anchorStateProof.Hashes)
+	if err != nil {
+		return nil, fmt.Errorf("anchor state proof: %w", err)
+	}
+	targetProofHashes, err := toHash32Slice(targetStateProof.Hashes)
+	if err != nil {
+		return nil, fmt.Errorf("history proof: %w", err)
+	}
+	blockHashProofHashes, err := toHash32Slice(blockHashProof.Hashes)
+	if err != nil {
+		return nil, fmt.Errorf("execution block hash proof: %w", err)
+	}
+
+	return &ExecutionProof{
+		ExecutionProof: zkadapter.ExecutionProof{
+			AnchorSlot:                 anchorSlot,
+			TargetSlot:                 targetSlot,
+			AnchorBeaconStateRoot:      anchorStateRoot,
+			AnchorBeaconStateProof:     anchorProofHashes,
+			TargetBeaconStateRoot:      targetStateRoot,
+			TargetBeaconStateProof:     targetProofHashes,
+			TargetExecutionHeaderRoot:  blockHash,
+			TargetExecutionHeaderProof: blockHashProofHashes,
+			TargetReceiptsRoot:         receiptsRoot,
+			TargetReceiptsProof:        [][32]byte{},
+		},
+		ExecutionHeaderRlp: headerRLP,
+	}, nil
+}
+
+// headerReceiptsRoot reads the receipts root from an execution header's RLP
+// encoding.
+func headerReceiptsRoot(headerRLP []byte) (common.Hash, error) {
+	var items []rlp.RawValue
+	if err := rlp.DecodeBytes(headerRLP, &items); err != nil {
+		return common.Hash{}, fmt.Errorf("failed to decode execution header: %w", err)
+	}
+	if len(items) <= headerReceiptsRootIndex {
+		return common.Hash{}, fmt.Errorf("execution header has only %d fields", len(items))
+	}
+	var receiptsRoot common.Hash
+	if err := rlp.DecodeBytes(items[headerReceiptsRootIndex], &receiptsRoot); err != nil {
+		return common.Hash{}, fmt.Errorf("failed to decode execution header receipts root: %w", err)
+	}
+	return receiptsRoot, nil
 }
 
 // toHash32Slice converts proof siblings to fixed 32-byte hashes, mirroring the

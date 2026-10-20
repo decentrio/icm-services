@@ -59,9 +59,19 @@ func readSepoliaBlock(t *testing.T, slot uint64) *beacon.SSZObject {
 // execution block parentBlockHash.
 func gloasBlock(t *testing.T, slot uint64, parentBlockHash common.Hash) *beacon.SSZObject {
 	t.Helper()
-	block := &gloas.SignedBeaconBlock{
+	data, err := minimalGloasBlock(slot, phase0.Root{}, parentBlockHash).MarshalSSZ()
+	require.NoError(t, err)
+	return &beacon.SSZObject{Fork: beacon.ForkGloas, Data: data}
+}
+
+// minimalGloasBlock builds the smallest Gloas block go-eth2-client will
+// serialize and hash, at slot, with the given state_root and with a bid that
+// builds on the execution block parentBlockHash.
+func minimalGloasBlock(slot uint64, stateRoot phase0.Root, parentBlockHash common.Hash) *gloas.SignedBeaconBlock {
+	return &gloas.SignedBeaconBlock{
 		Message: &gloas.BeaconBlock{
-			Slot: phase0.Slot(slot),
+			Slot:      phase0.Slot(slot),
+			StateRoot: stateRoot,
 			Body: &gloas.BeaconBlockBody{
 				ETH1Data: &phase0.ETH1Data{BlockHash: make([]byte, 32)},
 				SyncAggregate: &altair.SyncAggregate{
@@ -77,9 +87,6 @@ func gloasBlock(t *testing.T, slot uint64, parentBlockHash common.Hash) *beacon.
 			},
 		},
 	}
-	data, err := block.MarshalSSZ()
-	require.NoError(t, err)
-	return &beacon.SSZObject{Fork: beacon.ForkGloas, Data: data}
 }
 
 // On the fixture's data, the block right after the payload's slot builds on

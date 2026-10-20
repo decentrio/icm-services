@@ -27,12 +27,24 @@ const (
 // read.
 type sepoliaFixture struct {
 	Metadata struct {
-		TxHash      common.Hash `json:"txHash"`
-		BlockNumber uint64      `json:"blockNumber"`
-		BlockHash   common.Hash `json:"blockHash"`
+		GloasForkEpoch uint64      `json:"gloasForkEpoch"`
+		TxHash         common.Hash `json:"txHash"`
+		BlockNumber    uint64      `json:"blockNumber"`
+		BlockHash      common.Hash `json:"blockHash"`
+		PayloadSlot    uint64      `json:"payloadSlot"`
 	} `json:"metadata"`
-	ExecutionProof struct {
-		ExecutionHeaderRlp hexutil.Bytes `json:"executionHeaderRlp"`
+	AnchorBeaconBlockRoot common.Hash `json:"anchorBeaconBlockRoot"`
+	ExecutionProof        struct {
+		AnchorSlot              uint64        `json:"anchorSlot"`
+		TargetSlot              uint64        `json:"targetSlot"`
+		AnchorBeaconStateRoot   common.Hash   `json:"anchorBeaconStateRoot"`
+		AnchorBeaconStateProof  []common.Hash `json:"anchorBeaconStateProof"`
+		TargetBeaconStateRoot   common.Hash   `json:"targetBeaconStateRoot"`
+		TargetBeaconStateProof  []common.Hash `json:"targetBeaconStateProof"`
+		ExecutionBlockHash      common.Hash   `json:"executionBlockHash"`
+		ExecutionBlockHashProof []common.Hash `json:"executionBlockHashProof"`
+		ExecutionHeaderRlp      hexutil.Bytes `json:"executionHeaderRlp"`
+		ReceiptsRoot            common.Hash   `json:"receiptsRoot"`
 	} `json:"executionProof"`
 	ReceiptProof struct {
 		Proof           []hexutil.Bytes `json:"proof"`

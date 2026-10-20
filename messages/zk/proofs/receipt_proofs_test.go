@@ -195,7 +195,7 @@ func (c *rpcFileClient) CallContext(_ context.Context, result any, method string
 	byNumber := id == hexutil.EncodeUint64(c.number)
 	byHash := id == c.hash || id == c.hash.Hex()
 	switch {
-	case method == "eth_getBlockByNumber" && byNumber:
+	case method == "eth_getBlockByNumber" && byNumber, method == "eth_getBlockByHash" && byHash:
 		return json.Unmarshal(c.block, result)
 	case method == "eth_getBlockReceipts" && (byNumber || byHash):
 		return json.Unmarshal(c.receipts, result)
