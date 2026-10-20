@@ -6,24 +6,23 @@
 package proofs
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"math/big"
 
-	"github.com/ava-labs/avalanchego/graft/evm/rpc"
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/common/hexutil"
 	"github.com/ava-labs/libevm/core/rawdb"
-	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/rlp"
 	"github.com/ava-labs/libevm/trie"
 	"github.com/ava-labs/libevm/triedb"
 )
 
-// ethClient is the subset of ethclient.Client used for proof building.
+// ethClient is the subset of rpc.Client used for proof building. Results are
+// decoded from raw JSON here rather than into libevm's types, which stop at
+// the Cancun fork: libevm's header hash is wrong for Prague and later
+// headers, and it encodes type-4 (EIP-7702) receipts as just their type byte.
 type ethClient interface {
-	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
-	BlockReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]*types.Receipt, error)
+	CallContext(ctx context.Context, result any, method string, args ...any) error
 }
 
 // ReceiptProof is a Merkle Patricia Tree (MPT) inclusion proof for
@@ -48,6 +47,26 @@ type ReceiptProof struct {
 	ExpectedTopic0 common.Hash
 }
 
+// rpcReceipt holds the fields of an eth_getBlockReceipts entry that the
+// receipts trie commits to, plus the transaction it belongs to.
+type rpcReceipt struct {
+	Type              hexutil.Uint64 `json:"type"`
+	Status            hexutil.Uint64 `json:"status"`
+	CumulativeGasUsed hexutil.Uint64 `json:"cumulativeGasUsed"`
+	LogsBloom         hexutil.Bytes  `json:"logsBloom"`
+	Logs              []rpcLog       `json:"logs"`
+	TxHash            common.Hash    `json:"transactionHash"`
+	TxIndex           hexutil.Uint64 `json:"transactionIndex"`
+}
+
+// rpcLog holds the fields of a log that the receipts trie commits to. Its
+// field order is the log's RLP encoding.
+type rpcLog struct {
+	Address common.Address `json:"address"`
+	Topics  []common.Hash  `json:"topics"`
+	Data    hexutil.Bytes  `json:"data"`
+}
+
 // BuildReceiptProof reconstructs the receipts trie for the block containing
 // txHash, verifies its root against the block header, and extracts the
 // inclusion proof for that transaction's receipt and the log at logIndex.
@@ -58,17 +77,21 @@ func BuildReceiptProof(
 	txHash common.Hash,
 	logIndex uint,
 ) (*ReceiptProof, error) {
-	// Get the target receipt corresponding to txHash and its log.
-	header, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNumber))
-	if err != nil {
+	// Get the target receipt corresponding to txHash and its log. Both are
+	// fetched by number; a reorg between the two fetches fails the receipts
+	// root check below.
+	number := hexutil.EncodeUint64(blockNumber)
+	var header *struct {
+		ReceiptsRoot common.Hash `json:"receiptsRoot"`
+	}
+	if err := client.CallContext(ctx, &header, "eth_getBlockByNumber", number, false); err != nil {
 		return nil, fmt.Errorf("failed to fetch header %d: %w", blockNumber, err)
 	}
-	// Fetch the receipts by number, not by header.Hash(): libevm's header type ends at the Cancun
-	// fields, so its hash is wrong for Prague and later headers. A reorg between the two fetches
-	// cannot go unnoticed, since the receipts are checked against this header's receipts root below,
-	// and the block is final by the time its proof is verified against a confirmed consensus anchor.
-	receipts, err := client.BlockReceipts(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blockNumber)))
-	if err != nil {
+	if header == nil {
+		return nil, fmt.Errorf("block %d not found", blockNumber)
+	}
+	var receipts []*rpcReceipt
+	if err := client.CallContext(ctx, &receipts, "eth_getBlockReceipts", number); err != nil {
 		return nil, fmt.Errorf("failed to fetch receipts for block %d: %w", blockNumber, err)
 	}
 	targetReceipt, err := receiptByTxHash(receipts, txHash)
@@ -88,15 +111,15 @@ func BuildReceiptProof(
 	// Build the receipts trie and verify its root against the header receipts root.
 	receiptsTrie, targetValue, err := buildReceiptsTrie(
 		receipts,
-		targetReceipt.TransactionIndex,
-		header.ReceiptHash,
+		uint64(targetReceipt.TxIndex),
+		header.ReceiptsRoot,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	// Compute the inclusion proof for the target receipt.
-	key, err := rlp.EncodeToBytes(targetReceipt.TransactionIndex)
+	key, err := rlp.EncodeToBytes(uint64(targetReceipt.TxIndex))
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode target trie key: %w", err)
 	}
@@ -120,26 +143,25 @@ func BuildReceiptProof(
 // the header's receipts root, so any encoding drift fails here rather than
 // producing proofs against the wrong tree.
 func buildReceiptsTrie(
-	receipts []*types.Receipt,
-	targetIndex uint,
+	receipts []*rpcReceipt,
+	targetIndex uint64,
 	receiptsRoot common.Hash,
 ) (*trie.Trie, []byte, error) {
 	receiptsTrie := trie.NewEmpty(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil))
-	var valueBuf bytes.Buffer
 	var targetValue []byte
-	receiptList := types.Receipts(receipts)
-	for i := range receipts {
-		key, err := rlp.EncodeToBytes(uint(i))
+	for i, receipt := range receipts {
+		key, err := rlp.EncodeToBytes(uint64(i))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to encode trie key %d: %w", i, err)
 		}
-		valueBuf.Reset()
-		receiptList.EncodeIndex(i, &valueBuf)
-		value := bytes.Clone(valueBuf.Bytes())
+		value, err := encodeReceipt(receipt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to encode receipt %d: %w", i, err)
+		}
 		if err := receiptsTrie.Update(key, value); err != nil {
 			return nil, nil, fmt.Errorf("failed to insert receipt %d into trie: %w", i, err)
 		}
-		if uint(i) == targetIndex {
+		if uint64(i) == targetIndex {
 			targetValue = value
 		}
 	}
@@ -154,7 +176,27 @@ func buildReceiptsTrie(
 	return receiptsTrie, targetValue, nil
 }
 
-func receiptByTxHash(receipts []*types.Receipt, txHash common.Hash) (*types.Receipt, error) {
+// encodeReceipt returns the receipt's consensus encoding, the value the
+// receipts trie stores: rlp([status, cumulativeGasUsed, logsBloom, logs]),
+// prefixed by the type byte for typed (EIP-2718) receipts. The body is the
+// same for every receipt type since Byzantium.
+func encodeReceipt(r *rpcReceipt) ([]byte, error) {
+	body, err := rlp.EncodeToBytes([]any{
+		uint64(r.Status),
+		uint64(r.CumulativeGasUsed),
+		[]byte(r.LogsBloom),
+		r.Logs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if r.Type == 0 {
+		return body, nil
+	}
+	return append([]byte{byte(r.Type)}, body...), nil
+}
+
+func receiptByTxHash(receipts []*rpcReceipt, txHash common.Hash) (*rpcReceipt, error) {
 	for _, r := range receipts {
 		if r.TxHash == txHash {
 			return r, nil

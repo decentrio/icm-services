@@ -5,12 +5,13 @@ package proofs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"testing"
 
-	"github.com/ava-labs/avalanchego/graft/evm/rpc"
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/common/hexutil"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
@@ -19,18 +20,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockEthClient returns fixed test data instead of querying a real chain.
+// mockEthClient returns fixed test data instead of querying a real chain,
+// serialized to JSON the way a node returns it.
 type mockEthClient struct {
 	header   *types.Header
 	receipts types.Receipts
 }
 
-func (f *mockEthClient) HeaderByNumber(_ context.Context, _ *big.Int) (*types.Header, error) {
-	return f.header, nil
+func (f *mockEthClient) CallContext(_ context.Context, result any, method string, _ ...any) error {
+	switch method {
+	case "eth_getBlockByNumber":
+		return jsonRoundTrip(f.header, result)
+	case "eth_getBlockReceipts":
+		return jsonRoundTrip(f.receipts, result)
+	default:
+		return fmt.Errorf("unexpected method %s", method)
+	}
 }
 
-func (f *mockEthClient) BlockReceipts(_ context.Context, _ rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
-	return f.receipts, nil
+// jsonRoundTrip decodes value's JSON encoding into result.
+func jsonRoundTrip(value any, result any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, result)
 }
 
 // makeTestBlock builds n synthetic receipts and a header carrying their
@@ -135,28 +149,59 @@ func TestBuildReceiptProofTxNotInBlock(t *testing.T) {
 	require.ErrorContains(t, err, "not found in block")
 }
 
-// sepoliaBlockClient serves a real Sepolia block's header and receipts. Like a
-// node, it answers receipt requests only for the block's number or its real
+// A block the node does not know, which it reports as a null result, must
+// error.
+func TestBuildReceiptProofBlockNotFound(t *testing.T) {
+	client, receipts := makeTestBlock(t, 2)
+	client.header = nil
+	_, err := BuildReceiptProof(context.Background(), client, 100, receipts[0].TxHash, 0)
+	require.ErrorContains(t, err, "block 100 not found")
+}
+
+// rpcFileClient serves a block and its receipts from saved JSON-RPC
+// responses. Like a node, it answers only for the block's number or its real
 // hash.
-type sepoliaBlockClient struct {
-	header   *types.Header
-	receipts []*types.Receipt
-	number   uint64
-	hash     common.Hash
+type rpcFileClient struct {
+	block        json.RawMessage
+	receipts     json.RawMessage
+	number       uint64
+	hash         common.Hash
+	receiptsRoot common.Hash
 }
 
-func (c *sepoliaBlockClient) HeaderByNumber(_ context.Context, _ *big.Int) (*types.Header, error) {
-	return c.header, nil
+func newRPCFileClient(t *testing.T, blockPath, receiptsPath string) *rpcFileClient {
+	t.Helper()
+	var header struct {
+		Number       hexutil.Uint64 `json:"number"`
+		Hash         common.Hash    `json:"hash"`
+		ReceiptsRoot common.Hash    `json:"receiptsRoot"`
+	}
+	loadRPCResult(t, blockPath, &header)
+	client := &rpcFileClient{
+		number:       uint64(header.Number),
+		hash:         header.Hash,
+		receiptsRoot: header.ReceiptsRoot,
+	}
+	loadRPCResult(t, blockPath, &client.block)
+	loadRPCResult(t, receiptsPath, &client.receipts)
+	return client
 }
 
-func (c *sepoliaBlockClient) BlockReceipts(_ context.Context, id rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
-	if number, ok := id.Number(); ok && uint64(number) == c.number {
-		return c.receipts, nil
+func (c *rpcFileClient) CallContext(_ context.Context, result any, method string, args ...any) error {
+	if len(args) == 0 {
+		return fmt.Errorf("%s: missing block argument", method)
 	}
-	if hash, ok := id.Hash(); ok && hash == c.hash {
-		return c.receipts, nil
+	id := args[0]
+	byNumber := id == hexutil.EncodeUint64(c.number)
+	byHash := id == c.hash || id == c.hash.Hex()
+	switch {
+	case method == "eth_getBlockByNumber" && byNumber:
+		return json.Unmarshal(c.block, result)
+	case method == "eth_getBlockReceipts" && (byNumber || byHash):
+		return json.Unmarshal(c.receipts, result)
+	default:
+		return fmt.Errorf("%s: no block %v", method, id)
 	}
-	return nil, fmt.Errorf("no block %s", id.String())
 }
 
 // Receipts must not be fetched by libevm's Header.Hash(): it ignores the
@@ -165,12 +210,7 @@ func (c *sepoliaBlockClient) BlockReceipts(_ context.Context, id rpc.BlockNumber
 // built by an independent MPT implementation.
 func TestBuildReceiptProofSepoliaBlock(t *testing.T) {
 	fixture := loadSepoliaFixture(t)
-	client := &sepoliaBlockClient{
-		number: fixture.Metadata.BlockNumber,
-		hash:   fixture.Metadata.BlockHash,
-	}
-	loadRPCResult(t, sepoliaBlockPath, &client.header)
-	loadRPCResult(t, sepoliaReceiptsPath, &client.receipts)
+	client := newRPCFileClient(t, sepoliaBlockPath, sepoliaReceiptsPath)
 
 	proof, err := BuildReceiptProof(
 		context.Background(), client, fixture.Metadata.BlockNumber, fixture.Metadata.TxHash, 0)
@@ -186,6 +226,26 @@ func TestBuildReceiptProofSepoliaBlock(t *testing.T) {
 	require.Equal(t, expected.LogIndex, proof.LogIndex)
 	require.Equal(t, expected.ExpectedEmitter, proof.ExpectedEmitter)
 	require.Equal(t, expected.ExpectedTopic0, proof.ExpectedTopic0)
+}
+
+// A block holding a type-4 (EIP-7702) receipt must reproduce the header's
+// receipts root. libevm's receipt encoding writes only the type byte for
+// type-4 receipts, so its trie misses the header's root.
+func TestBuildReceiptProofSetCodeReceipt(t *testing.T) {
+	const (
+		blockPath    = "testdata/sepolia/el_block_11955870.json"
+		receiptsPath = "testdata/sepolia/el_receipts_11955870.json"
+	)
+	// The block's only type-4 receipt, at transaction index 7.
+	setCodeTx := common.HexToHash("0xe46a1e7377bafb5229b1b852d696f976b6945b57ff28a08e6c4c20bc7970a78c")
+	client := newRPCFileClient(t, blockPath, receiptsPath)
+
+	proof, err := BuildReceiptProof(context.Background(), client, client.number, setCodeTx, 0)
+	require.NoError(t, err)
+
+	provenValue := verifyProofAgainstRoot(t, client.receiptsRoot, proof.Key, proof.Proof)
+	require.Equal(t, proof.Value, provenValue)
+	require.Equal(t, byte(0x04), proof.Value[0], "EIP-7702 receipt type")
 }
 
 // A header whose receipts root doesn't match the block's receipts must error
