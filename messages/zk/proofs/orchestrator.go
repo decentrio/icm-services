@@ -84,13 +84,9 @@ func (b *ProofBuilder) BuildExecutionProofForBlock(
 	anchorSlot uint64,
 	anchorBlockRoot common.Hash,
 	target ExecutionTarget,
-) (*ExecutionProof, error) {
+) (*zkadapter.ExecutionProof, error) {
 	if !b.forks.isGloas(target.PayloadSlot) {
-		proof, err := b.BuildExecutionProofForSlots(ctx, anchorSlot, target.PayloadSlot, anchorBlockRoot)
-		if err != nil {
-			return nil, err
-		}
-		return &ExecutionProof{ExecutionProof: *proof}, nil
+		return b.BuildExecutionProofForSlots(ctx, anchorSlot, target.PayloadSlot, anchorBlockRoot)
 	}
 	return b.buildGloasExecutionProof(ctx, anchorSlot, anchorBlockRoot, target)
 }
@@ -104,7 +100,7 @@ func (b *ProofBuilder) buildGloasExecutionProof(
 	anchorSlot uint64,
 	anchorBlockRoot common.Hash,
 	target ExecutionTarget,
-) (*ExecutionProof, error) {
+) (*zkadapter.ExecutionProof, error) {
 	targetSlot, err := locateCommittingSlot(ctx, b.client, target.PayloadSlot, anchorSlot, target.BlockHash)
 	if err != nil {
 		return nil, err

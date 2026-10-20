@@ -57,17 +57,6 @@ const (
 	headerReceiptsRootIndex = 5
 )
 
-// ExecutionProof is the contract's Execution.Proof: the generated binding's
-// fields plus the execution header's RLP encoding, which Gloas proofs carry
-// and Fulu proofs leave empty.
-//
-// TODO: Return zkadapter.ExecutionProof directly once the regenerated
-// bindings carry ExecutionHeaderRlp.
-type ExecutionProof struct {
-	zkadapter.ExecutionProof
-	ExecutionHeaderRlp []byte
-}
-
 // BuildExecutionProof builds the four SSZ Merkle proofs that the ZKAdapter's
 // Execution.verify consumes, returning the generated binding struct
 // zkadapter.ExecutionProof directly so any contract level changes surface as compile
@@ -189,7 +178,7 @@ func BuildGloasExecutionProof(
 	anchorBlockRoot common.Hash,
 	anchorSlot uint64,
 	targetSlot uint64,
-) (*ExecutionProof, error) {
+) (*zkadapter.ExecutionProof, error) {
 	// Safety check
 	if err := validateSlotWindow(anchorSlot, targetSlot); err != nil {
 		return nil, err
@@ -244,20 +233,18 @@ func BuildGloasExecutionProof(
 		return nil, fmt.Errorf("execution block hash proof: %w", err)
 	}
 
-	return &ExecutionProof{
-		ExecutionProof: zkadapter.ExecutionProof{
-			AnchorSlot:                 anchorSlot,
-			TargetSlot:                 targetSlot,
-			AnchorBeaconStateRoot:      anchorStateRoot,
-			AnchorBeaconStateProof:     anchorProofHashes,
-			TargetBeaconStateRoot:      targetStateRoot,
-			TargetBeaconStateProof:     targetProofHashes,
-			TargetExecutionHeaderRoot:  blockHash,
-			TargetExecutionHeaderProof: blockHashProofHashes,
-			TargetReceiptsRoot:         receiptsRoot,
-			TargetReceiptsProof:        [][32]byte{},
-		},
-		ExecutionHeaderRlp: headerRLP,
+	return &zkadapter.ExecutionProof{
+		AnchorSlot:                 anchorSlot,
+		TargetSlot:                 targetSlot,
+		AnchorBeaconStateRoot:      anchorStateRoot,
+		AnchorBeaconStateProof:     anchorProofHashes,
+		TargetBeaconStateRoot:      targetStateRoot,
+		TargetBeaconStateProof:     targetProofHashes,
+		TargetExecutionHeaderRoot:  blockHash,
+		TargetExecutionHeaderProof: blockHashProofHashes,
+		TargetReceiptsRoot:         receiptsRoot,
+		TargetReceiptsProof:        [][32]byte{},
+		ExecutionHeaderRlp:         headerRLP,
 	}, nil
 }
 

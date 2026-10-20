@@ -183,7 +183,7 @@ func TestBuildExecutionProofForBlockFulu(t *testing.T) {
 	expected, err := NewProofBuilder(f.client).BuildExecutionProofForSlots(
 		context.Background(), f.anchorSlot, f.targetSlot, f.anchorBlockRoot)
 	require.NoError(t, err)
-	require.Equal(t, *expected, proof.ExecutionProof)
+	require.Equal(t, expected, proof)
 	require.Empty(t, proof.ExecutionHeaderRlp)
 }
 
