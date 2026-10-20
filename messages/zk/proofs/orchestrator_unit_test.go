@@ -18,33 +18,36 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/fulu"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ava-labs/icm-services/messages/zk/proofs/beacon"
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
 
-// mockBeaconClient serves SSZ-encoded mock beacon blocks and states by slot.
+// mockBeaconClient serves SSZ-encoded mock beacon blocks and states by slot,
+// all reported under the same fork.
 type mockBeaconClient struct {
+	fork         beacon.Fork
 	blocks       map[uint64][]byte
 	states       map[uint64][]byte
 	stateFetches map[uint64]int // Tracks the number of times each state's been fetched from the client
 }
 
-func (m *mockBeaconClient) Block(_ context.Context, slot uint64) ([]byte, error) {
+func (m *mockBeaconClient) Block(_ context.Context, slot uint64) (*beacon.SSZObject, error) {
 	b, ok := m.blocks[slot]
 	if !ok {
 		return nil, errors.New("no block at slot")
 	}
-	return b, nil
+	return &beacon.SSZObject{Fork: m.fork, Data: b}, nil
 }
 
-func (m *mockBeaconClient) State(_ context.Context, slot uint64) ([]byte, error) {
+func (m *mockBeaconClient) State(_ context.Context, slot uint64) (*beacon.SSZObject, error) {
 	m.stateFetches[slot]++
 	s, ok := m.states[slot]
 	if !ok {
 		return nil, errors.New("no state at slot")
 	}
-	return s, nil
+	return &beacon.SSZObject{Fork: m.fork, Data: s}, nil
 }
 
 // mockFixture is a synthetic anchor block, anchor state, and target state,
@@ -135,6 +138,18 @@ func TestBuildExecutionProofForSlotsBrokenHistoryLink(t *testing.T) {
 	_, err = builder.BuildExecutionProofForSlots(
 		context.Background(), f.anchorSlot, f.targetSlot, common.Hash(anchorBlockRoot))
 	require.ErrorContains(t, err, "lite state root mismatch")
+}
+
+// Beacon objects of another fork must be rejected rather than decoded as Fulu
+// objects.
+func TestBuildExecutionProofForSlotsRejectsOtherForks(t *testing.T) {
+	f := newMockFixture(t)
+	builder := NewProofBuilder(f.client)
+	f.client.fork = beacon.ForkGloas
+
+	_, err := builder.BuildExecutionProofForSlots(
+		context.Background(), f.anchorSlot, f.targetSlot, f.anchorBlockRoot)
+	require.ErrorContains(t, err, `anchor block at slot 200 is a "gloas" object, expected "fulu"`)
 }
 
 // A block fetch failure must surface with the slot that failed.
@@ -229,6 +244,7 @@ func newMockFixtureWithSlots(t *testing.T, anchorSlot, targetSlot uint64) *mockF
 
 	return &mockFixture{
 		client: &mockBeaconClient{
+			fork:         beacon.ForkFulu,
 			blocks:       map[uint64][]byte{anchorSlot: blockSSZ},
 			states:       map[uint64][]byte{anchorSlot: anchorSSZ, targetSlot: targetSSZ},
 			stateFetches: map[uint64]int{},

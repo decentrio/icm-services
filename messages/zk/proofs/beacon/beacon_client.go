@@ -8,6 +8,7 @@ package beacon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,10 +18,28 @@ import (
 	"github.com/ava-labs/libevm/common"
 )
 
-// supportedForkVersion is the consensus fork this package's parsers assume.
-// Blocks decode as Electra types and states as Fulu, both of which the
-// beacon API reports under the Fulu fork name.
-const supportedForkVersion = "fulu"
+// Fork is a consensus fork name, as the beacon API reports it in the
+// Eth-Consensus-Version header.
+type Fork string
+
+// The consensus forks this package's parsers support. Under Fulu, blocks
+// decode as Electra types and states as Fulu types; under Gloas, both decode
+// as Gloas types.
+const (
+	ForkFulu  Fork = "fulu"
+	ForkGloas Fork = "gloas"
+)
+
+// ErrNoBlockAtSlot is returned when the beacon node has no block at the
+// requested slot, which happens when the slot was missed.
+var ErrNoBlockAtSlot = errors.New("no beacon block at slot")
+
+// SSZObject is an SSZ encoded beacon object and the consensus fork the
+// beacon node encoded it under.
+type SSZObject struct {
+	Fork Fork
+	Data []byte
+}
 
 // maxBeaconObjectBytes bounds response bodies; mainnet states are ~200MB.
 const maxBeaconObjectBytes = 1 << 30
@@ -68,19 +87,27 @@ func (c *BeaconClient) BlockRoot(ctx context.Context, slot uint64) (common.Hash,
 	return common.HexToHash(result.Data.Root), nil
 }
 
-// Block returns the SSZ encoded SignedBeaconBlock at the given slot.
-func (c *BeaconClient) Block(ctx context.Context, slot uint64) ([]byte, error) {
-	return c.fetchSSZBytes(ctx, fmt.Sprintf("%s/eth/v2/beacon/blocks/%d", c.baseURL, slot))
+// Block returns the SSZ encoded SignedBeaconBlock at the given slot, or
+// ErrNoBlockAtSlot if the slot was missed.
+func (c *BeaconClient) Block(ctx context.Context, slot uint64) (*SSZObject, error) {
+	block, err := c.fetchSSZ(ctx, fmt.Sprintf("%s/eth/v2/beacon/blocks/%d", c.baseURL, slot))
+	if errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("%w %d", ErrNoBlockAtSlot, slot)
+	}
+	return block, err
 }
 
 // State returns the SSZ encoded BeaconState at the given slot.
-func (c *BeaconClient) State(ctx context.Context, slot uint64) ([]byte, error) {
-	return c.fetchSSZBytes(ctx, fmt.Sprintf("%s/eth/v2/debug/beacon/states/%d", c.baseURL, slot))
+func (c *BeaconClient) State(ctx context.Context, slot uint64) (*SSZObject, error) {
+	return c.fetchSSZ(ctx, fmt.Sprintf("%s/eth/v2/debug/beacon/states/%d", c.baseURL, slot))
 }
 
-// fetchSSZBytes requests the raw SSZ encoding for the beacon object being fetched at url,
+// errNotFound marks a 404 response.
+var errNotFound = errors.New("not found")
+
+// fetchSSZ requests the raw SSZ encoding for the beacon object being fetched at url,
 // rather than the API's default JSON encoding.
-func (c *BeaconClient) fetchSSZBytes(ctx context.Context, url string) ([]byte, error) {
+func (c *BeaconClient) fetchSSZ(ctx context.Context, url string) (*SSZObject, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -91,13 +118,17 @@ func (c *BeaconClient) fetchSSZBytes(ctx context.Context, url string) ([]byte, e
 		return nil, fmt.Errorf("SSZ fetch failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("SSZ fetch %s: %w", url, errNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("SSZ fetch %s: status %d", url, resp.StatusCode)
 	}
 
 	// Reject unsupported consensus forks.
-	if fork := resp.Header.Get("Eth-Consensus-Version"); !strings.EqualFold(fork, supportedForkVersion) {
-		return nil, fmt.Errorf("unsupported consensus fork %q for %s: expected %s", fork, url, supportedForkVersion)
+	fork := Fork(strings.ToLower(resp.Header.Get("Eth-Consensus-Version")))
+	if fork != ForkFulu && fork != ForkGloas {
+		return nil, fmt.Errorf("unsupported consensus fork %q for %s: expected %s or %s", fork, url, ForkFulu, ForkGloas)
 	}
 
 	// Check if the response body is too large to read into memory.
@@ -108,5 +139,5 @@ func (c *BeaconClient) fetchSSZBytes(ctx context.Context, url string) ([]byte, e
 	if len(body) > maxBeaconObjectBytes {
 		return nil, fmt.Errorf("SSZ fetch %s: response exceeds %d bytes", url, maxBeaconObjectBytes)
 	}
-	return body, nil
+	return &SSZObject{Fork: fork, Data: body}, nil
 }

@@ -25,8 +25,8 @@ import (
 // contract.
 // TODO: Export in future PR.
 type beaconClient interface {
-	Block(ctx context.Context, slot uint64) ([]byte, error)
-	State(ctx context.Context, slot uint64) ([]byte, error)
+	Block(ctx context.Context, slot uint64) (*beacon.SSZObject, error)
+	State(ctx context.Context, slot uint64) (*beacon.SSZObject, error)
 }
 
 // liteStateCacheSize is the number of parsed lite beacon states kept in memory. A single anchor
@@ -76,11 +76,16 @@ func (b *ProofBuilder) BuildExecutionProofForSlots(
 	}
 
 	// Get the SSZ-encoded anchor beacon block from the beaconClient and parse it into a tree.
-	blockSSZ, err := b.client.Block(ctx, anchorSlot)
+	block, err := b.client.Block(ctx, anchorSlot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch anchor block at slot %d: %w", anchorSlot, err)
 	}
-	anchorBlockTree, anchorStateRoot, err := beacon.ParseBlockTree(blockSSZ)
+	// This path decodes Fulu objects only. The anchor's fork bounds the target's.
+	if block.Fork != beacon.ForkFulu {
+		return nil, fmt.Errorf("anchor block at slot %d is a %q object, expected %q",
+			anchorSlot, block.Fork, beacon.ForkFulu)
+	}
+	anchorBlockTree, anchorStateRoot, err := beacon.ParseBlockTree(block.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -136,11 +141,11 @@ func (b *ProofBuilder) getLiteState(ctx context.Context, slot uint64) (*beacon.L
 	if lite, ok := b.liteStates.Get(slot); ok {
 		return lite, nil
 	}
-	stateSSZ, err := b.client.State(ctx, slot)
+	state, err := b.client.State(ctx, slot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch beacon state at slot %d: %w", slot, err)
 	}
-	lite, err := beacon.ParseLiteBeaconState(stateSSZ)
+	lite, err := beacon.ParseLiteBeaconState(state.Data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse beacon state at slot %d: %w", slot, err)
 	}
