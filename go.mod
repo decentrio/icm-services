@@ -7,7 +7,7 @@ tool github.com/golangci/golangci-lint/cmd/golangci-lint
 require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/alexliesenfeld/health v0.8.1
-	github.com/attestantio/go-eth2-client v0.29.0
+	github.com/attestantio/go-eth2-client v0.30.1
 	github.com/ava-labs/avalanchego v1.15.0
 	github.com/ava-labs/avalanchego/graft/subnet-evm v1.15.0
 	github.com/ava-labs/libevm v1.13.15-0.20260903154605-2eaf73af626c
@@ -101,7 +101,6 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.3 // indirect
 	github.com/butuzov/ireturn v0.3.1 // indirect
 	github.com/butuzov/mirror v1.3.0 // indirect
-	github.com/casbin/govaluate v1.10.0 // indirect
 	github.com/catenacyber/perfsprint v0.8.2 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -248,8 +247,8 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pires/go-proxyproto v0.6.2 // indirect
-	github.com/pk910/dynamic-ssz v1.3.2 // indirect
-	github.com/pk910/hashtree-bindings v0.2.2 // indirect
+	github.com/pk910/dynamic-ssz v1.4.0 // indirect
+	github.com/pk910/hashtree-bindings v0.2.6 // indirect
 	github.com/polyfloyd/go-errorlint v1.7.1 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
