@@ -55,3 +55,6 @@ icm-contracts/coverage/
 
 TeleporterRegistryAddress.json
 ValidatorAddresses.json
+
+# Working directory of scripts/tools/sepolia-fuji-ictt/run.sh, with the updater key
+sepolia-fuji-run/
