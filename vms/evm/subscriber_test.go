@@ -19,6 +19,7 @@ import (
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/common/hexutil"
 	"github.com/ava-labs/libevm/core/types"
+	"github.com/ava-labs/libevm/rpc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +39,8 @@ type subscriberClientStub struct {
 	// onSubscribe, if set, is called by SubscribeFilterLogs with the subscription's channel, so
 	// that a test can deliver logs as soon as the subscription opens.
 	onSubscribe func(ch chan<- types.Log)
+	// subscribeQuery is the query of the last SubscribeFilterLogs call.
+	subscribeQuery ethereum.FilterQuery
 }
 
 func (c *subscriberClientStub) BlockNumber(ctx context.Context) (uint64, error) {
@@ -76,6 +79,7 @@ func (c *subscriberClientStub) SubscribeFilterLogs(
 	ch chan<- types.Log,
 ) (ethereum.Subscription, error) {
 	c.numSubscribeFilterLogsCalls.Add(1)
+	c.subscribeQuery = q
 	if c.onSubscribe != nil {
 		c.onSubscribe(ch)
 	}
@@ -318,6 +322,19 @@ func TestBlocksInfoFromLogs(t *testing.T) {
 	require.Empty(t, errChan)
 	// One fetch per block, regardless of the number of notifications for it.
 	require.EqualValues(t, 2, stubRPCClient.numFilterLogCalls.Load())
+}
+
+// The subscription only reports new logs; catch-up covers the earlier blocks. Without a fromBlock
+// the client sends 0x0, which a node that prunes old history (Geth 1.17+) rejects with "pruned
+// history unavailable".
+func TestSubscribeAsksForLogsFromTheLatestBlock(t *testing.T) {
+	errChan := make(chan error, 1)
+	subscriberUnderTest, stubRPCClient := makeSubscriberWithMockEthClient(t, errChan)
+	stubRPCClient.blockNumber = testStartingHeight
+
+	require.NoError(t, subscriberUnderTest.Subscribe(time.Second))
+	require.NotNil(t, stubRPCClient.subscribeQuery.FromBlock)
+	require.Equal(t, int64(rpc.LatestBlockNumber), stubRPCClient.subscribeQuery.FromBlock.Int64())
 }
 
 // Subscribing dispatches catch-up of every block up to the subscribed node's head, and blocks

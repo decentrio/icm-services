@@ -20,6 +20,7 @@ import (
 	"github.com/ava-labs/libevm/common/hexutil"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/ethclient"
+	"github.com/ava-labs/libevm/rpc"
 	"go.uber.org/zap"
 )
 
@@ -458,7 +459,10 @@ func (s *Subscriber) subscribe(retryTimeout time.Duration) error {
 	operation := func() (err error) {
 		cctx, cancel := context.WithTimeout(context.Background(), utils.DefaultRPCTimeout)
 		defer cancel()
+		// Only new logs: catch-up covers the earlier blocks. Without a fromBlock the client sends
+		// 0x0, which nodes that prune old history reject.
 		sub, err = s.wsClient.SubscribeFilterLogs(cctx, ethereum.FilterQuery{
+			FromBlock: big.NewInt(int64(rpc.LatestBlockNumber)),
 			Addresses: s.filter.Addresses,
 			Topics:    s.filter.Topics,
 		}, s.logs)
