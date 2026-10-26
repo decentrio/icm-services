@@ -26,6 +26,7 @@ const (
 	TELEPORTER
 	OFF_CHAIN_REGISTRY
 	TELEPORTER_V2
+	ZK_LIGHT_CLIENT
 )
 
 func (msg MessageProtocol) String() string {
@@ -36,6 +37,8 @@ func (msg MessageProtocol) String() string {
 		return "off-chain-registry"
 	case TELEPORTER_V2:
 		return "teleporter-v2"
+	case ZK_LIGHT_CLIENT:
+		return "zk-light-client"
 	default:
 		return "unknown"
 	}
@@ -50,6 +53,8 @@ func ParseMessageProtocol(msg string) MessageProtocol {
 		return OFF_CHAIN_REGISTRY
 	case "teleporter-v2":
 		return TELEPORTER_V2
+	case "zk-light-client":
+		return ZK_LIGHT_CLIENT
 	default:
 		return UNKNOWN_MESSAGE_PROTOCOL
 	}

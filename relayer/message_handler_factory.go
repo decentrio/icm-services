@@ -11,6 +11,7 @@ import (
 	offchainregistry "github.com/ava-labs/icm-services/messages/off-chain-registry"
 	"github.com/ava-labs/icm-services/messages/teleporter"
 	teleporterv2 "github.com/ava-labs/icm-services/messages/teleporterv2"
+	"github.com/ava-labs/icm-services/messages/zk/lightclient"
 	"github.com/ava-labs/icm-services/peers/clients"
 	"github.com/ava-labs/icm-services/relayer/config"
 	"github.com/ava-labs/libevm/common"
@@ -23,6 +24,7 @@ func NewMessageHandlerFactory(
 	cfg config.MessageProtocolConfig,
 	pChainClient clients.CanonicalValidatorState,
 	sourceSubnetID ids.ID,
+	sourceRPCURL string,
 ) (messages.MessageHandlerFactory, error) {
 	switch config.ParseMessageProtocol(cfg.MessageFormat) {
 	case config.TELEPORTER:
@@ -31,6 +33,8 @@ func NewMessageHandlerFactory(
 		return offchainregistry.NewMessageHandlerFactory(cfg)
 	case config.TELEPORTER_V2:
 		return teleporterv2.NewMessageHandlerFactory(address, cfg, pChainClient, sourceSubnetID)
+	case config.ZK_LIGHT_CLIENT:
+		return lightclient.NewMessageHandlerFactory(address, cfg, sourceRPCURL)
 	default:
 		return nil, fmt.Errorf("invalid message format %s", cfg.MessageFormat)
 	}

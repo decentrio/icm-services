@@ -10,6 +10,7 @@
 package lightclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,6 +61,18 @@ func FindSentMessage(
 	txHash common.Hash,
 	adapter common.Address,
 ) (*SentMessage, error) {
+	return findSentMessage(ctx, el, txHash, adapter, nil)
+}
+
+// findSentMessage returns the message that adapter emitted in transaction txHash with log data
+// payload, or the first one if payload is nil.
+func findSentMessage(
+	ctx context.Context,
+	el ethClient,
+	txHash common.Hash,
+	adapter common.Address,
+	payload []byte,
+) (*SentMessage, error) {
 	var receipt *struct {
 		BlockNumber hexutil.Uint64 `json:"blockNumber"`
 		BlockHash   common.Hash    `json:"blockHash"`
@@ -77,6 +90,9 @@ func FindSentMessage(
 	}
 	for i, l := range receipt.Logs {
 		if l.Address != adapter || len(l.Topics) == 0 || l.Topics[0] != messageSentTopic {
+			continue
+		}
+		if payload != nil && !bytes.Equal(l.Data, payload) {
 			continue
 		}
 		message, err := decodeMessageSent(l.Data)

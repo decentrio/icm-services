@@ -436,6 +436,7 @@ func createMessageHandlerFactories(
 				cfg,
 				pChainClient,
 				sourceBlockchain.GetSubnetID(),
+				sourceBlockchain.RPCEndpoint.BaseURL,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create message handler factory: %w", err)
