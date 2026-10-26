@@ -1,0 +1,17 @@
+# ICM relayer for both directions: Fuji -> Sepolia (Fuji validators' signatures) and
+# Sepolia -> Fuji (proofs against the ZK light client). /etc/bridge/relayer.json holds the keys
+# (chmod 600); start from relayer.example.json.
+[Unit]
+Description=ICM relayer (Sepolia <-> Fuji)
+After=network-online.target avalanchego-fuji.service
+Wants=network-online.target avalanchego-fuji.service
+
+[Service]
+User=bridge
+WorkingDirectory=/var/lib/icm-relayer
+ExecStart=/opt/bridge/bin/icm-relayer --config-file /etc/bridge/relayer.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

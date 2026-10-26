@@ -1,0 +1,68 @@
+{
+  "log-level": "info",
+  "storage-location": "/var/lib/icm-relayer/db",
+  "api-port": 18080,
+  "metrics-port": 19090,
+  "process-missed-blocks": true,
+  "p-chain-api": { "base-url": "http://127.0.0.1:9650" },
+  "info-api": { "base-url": "http://127.0.0.1:9650" },
+  "source-blockchains": [
+    {
+      "subnet-id": "11111111111111111111111111111111LpoYY",
+      "blockchain-id": "yH8D7ThNJkxmtkuv2jgBa4P1Rn3Qpr4pPr7QYNfcdoS6k6HWp",
+      "rpc-endpoint": { "base-url": "https://avalanche-fuji-c-chain-rpc.publicnode.com" },
+      "ws-endpoint": { "base-url": "wss://avalanche-fuji-c-chain-rpc.publicnode.com" },
+      "message-contracts": {
+        "0x68fc991fd5e846f3c9d969af08eb5fe3e39d16d0": {
+          "message-format": "teleporter-v2",
+          "settings": {
+            "reward-address": "<RELAYER_ADDRESS>",
+            "registry-address": "0x68fc991fd5e846f3c9d969af08eb5fe3e39d16d0",
+            "teleporter-address": "0xa2ae68a3f1e5c9fe71dedfa681900d178c2cd79a"
+          }
+        }
+      },
+      "supported-destinations": [{ "blockchain-id": "111111111111111111111111111117T7uZC8aWy" }]
+    },
+    {
+      "subnet-id": "11111111111111111111111111111111LpoYY",
+      "blockchain-id": "111111111111111111111111111117T7uZC8aWy",
+      "rpc-endpoint": { "base-url": "http://<SEPOLIA_EL>:8545" },
+      "ws-endpoint": { "base-url": "ws://<SEPOLIA_EL>:8546" },
+      "message-contracts": {
+        "0x59d6683a899a5374a9396b8c3c67a8586bfd9add": {
+          "message-format": "zk-light-client",
+          "settings": {
+            "reward-address": "<RELAYER_ADDRESS>",
+            "light-client-address": "0x4fc01ae40bf56e5b517af7b1f6424d1074313e5c",
+            "teleporter-address": "0xa2ae68a3f1e5c9fe71dedfa681900d178c2cd79a",
+            "beacon-api-url": "http://<SEPOLIA_CL>:3500"
+          }
+        }
+      },
+      "supported-destinations": [{ "blockchain-id": "yH8D7ThNJkxmtkuv2jgBa4P1Rn3Qpr4pPr7QYNfcdoS6k6HWp" }]
+    }
+  ],
+  "destination-blockchains": [
+    {
+      "subnet-id": "11111111111111111111111111111111LpoYY",
+      "blockchain-id": "yH8D7ThNJkxmtkuv2jgBa4P1Rn3Qpr4pPr7QYNfcdoS6k6HWp",
+      "rpc-endpoint": { "base-url": "https://api.avax-test.network/ext/bc/C/rpc" },
+      "account-private-key": "<RELAYER_KEY>"
+    }
+  ],
+  "external-evm-destinations": [
+    {
+      "rpc-endpoint": "http://<SEPOLIA_EL>:8545",
+      "private-key": "<REGISTRY_UPDATER_KEY>",
+      "contract-address": "0x68fc991fd5e846f3c9d969af08eb5fe3e39d16d0",
+      "blockchain-id": "yH8D7ThNJkxmtkuv2jgBa4P1Rn3Qpr4pPr7QYNfcdoS6k6HWp",
+      "subnet-id": "11111111111111111111111111111111LpoYY",
+      "poll-interval-seconds": 600,
+      "destination-blockchain-id": "111111111111111111111111111117T7uZC8aWy",
+      "teleporter-address": "0xa2ae68a3f1e5c9fe71dedfa681900d178c2cd79a",
+      "delivery-private-key": "<RELAYER_KEY>",
+      "tx-inclusion-timeout-seconds": 90
+    }
+  ]
+}

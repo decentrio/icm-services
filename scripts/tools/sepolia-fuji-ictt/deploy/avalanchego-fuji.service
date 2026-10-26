@@ -1,0 +1,17 @@
+# Fuji node that syncs only the P-Chain. The relayer reads validator sets at past heights from
+# it (platform.getValidatorsAt), which the public API refuses.
+[Unit]
+Description=avalanchego (Fuji, P-Chain only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bridge
+ExecStart=/opt/bridge/bin/avalanchego --network-id=fuji --partial-sync-primary-network \
+  --data-dir=/var/lib/avalanchego --http-host=127.0.0.1 --http-port=9650 --staking-port=9651
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
