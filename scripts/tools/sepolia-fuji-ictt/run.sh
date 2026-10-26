@@ -58,6 +58,7 @@ if [ ! -s light-client.txt ]; then
         (cd "$ALC" && go run ./cmd/devsetup -circuit rotate -n 512 -out keys \
             -verifier contracts/src/dev/Rotate512Verifier.sol)
     fi
+    mkdir -p "$ALC/contracts/deploy"
     (cd "$ALC" && go run ./cmd/bootstrap -beacon "$BEACON" -out contracts/deploy/sepolia.json)
     (cd "$ALC/contracts" && BOOTSTRAP=deploy/sepolia.json forge script script/Deploy.s.sol \
         --rpc-url "$FUJI_RPC" --private-key "$KEY" --broadcast --slow) | tee deploy-light-client.log
