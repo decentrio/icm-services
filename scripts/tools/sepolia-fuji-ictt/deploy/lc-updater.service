@@ -17,7 +17,8 @@ ExecStart=/opt/bridge/bin/updater \
   -keys /var/lib/lc-updater/keys \
   -demand-rpc http://<SEPOLIA_EL>:8545 \
   -adapter 0x59d6683a899a5374a9396b8c3c67a8586bfd9add \
-  -step-interval 1h
+  -step-interval 1h \
+  -interval 12s
 Restart=always
 RestartSec=10
 

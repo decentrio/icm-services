@@ -82,7 +82,7 @@ systemctl enable --now avalanchego-fuji
 curl -s -X POST -H 'content-type:application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"info.isBootstrapped","params":{"chain":"P"}}' \
   http://127.0.0.1:9650/ext/info          # → "isBootstrapped":true
-systemctl enable --now lc-updater          # loads the keys (≈ 3 min), then ticks every minute
+systemctl enable --now lc-updater          # loads the keys (≈ 3 min), then ticks every 12 s
 systemctl enable --now icm-relayer
 ```
 
@@ -104,7 +104,7 @@ The pages live in `decentrio/Dividend-Bridge-UI`, branch `feat/fuji-sepolia-moni
 |---|---|
 | Fuji node | `info.isBootstrapped` (P) is `true` |
 | Relayer up | `curl -s localhost:18080/health` → `"status":"up"`; log `Initialization complete`, then `Connected to sufficient stake` |
-| Updater up | log `stepping on demand for messages from 0x59D6…`, then `tick done … latest finalized slot N` every minute |
+| Updater up | log `stepping on demand for messages from 0x59D6…`, then `tick done … latest finalized slot N` every 12 s |
 | Light client | `cast call 0x4fc01ae40bf56e5b517af7b1f6424d1074313e5c 'latestFinalizedSlot()(uint64)' --rpc-url https://api.avax-test.network/ext/bc/C/rpc` advances after each `submitStep` |
 | End to end | Send 1 EXMP Sepolia → Fuji and 0.5 EXMP.e back (`go run ./scripts/tools/sepolia-fuji-ictt send …`, or the UI's Bridge page). Relayer logs `Delivered message to destination chain` for each; the UI monitor shows both as Delivered. |
 

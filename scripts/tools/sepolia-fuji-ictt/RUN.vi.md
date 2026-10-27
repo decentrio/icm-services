@@ -87,7 +87,7 @@ Khi server đã chạy thì **tắt các tiến trình trên laptop**, vì cùng
 
 ```sh
 curl -s localhost:18080/health        # relayer: "status":"up"
-journalctl -u lc-updater -f           # updater: "tick done ... latest finalized slot N" mỗi phút
+journalctl -u lc-updater -f           # updater: "tick done ... latest finalized slot N" mỗi ~12 giây
 ```
 
 Thử chuyển 1 EXMP Sepolia → Fuji (mất ~15–20 phút) và 0,5 EXMP.e Fuji → Sepolia (mất ~10–30 giây), bằng trang Bridge trên UI. Log relayer phải có dòng `Delivered message to destination chain`.
