@@ -18,9 +18,9 @@ Deployed contracts (addresses in `deployment.json` on the laptop):
 
 | Contract | Chain | Address |
 |---|---|---|
-| ZK light client of Sepolia | Fuji | `0x4fc01ae40bf56e5b517af7b1f6424d1074313e5c` |
-| TeleporterMessengerV2 | both | `0xa2ae68a3f1e5c9fe71dedfa681900d178c2cd79a` |
-| LightClientAdapter | both | `0x59d6683a899a5374a9396b8c3c67a8586bfd9add` |
+| ZK light client of Sepolia | Fuji | `0xb72fefdfde361319ebb54bb2f9fef5fa70b42efe` |
+| TeleporterMessengerV2 | both | `0xc7e56e3861b19435e4ec5e36035a808a9db51538` |
+| LightClientAdapter | both | `0xf76523ba1dc38a930c63a0e64ca5efd853f52413` |
 | MerkleValidatorSetRegistry | both | `0x68fc991fd5e846f3c9d969af08eb5fe3e39d16d0` |
 | EXMP (token) / ERC20TokenHome | Sepolia | `0xfa476f2a25c82ebcd10568896f886267cf2fa347` / `0x6677Cf31dAf512eA27353B0eFd296f59d426d0F6` |
 | EXMP.e (ERC20TokenRemote) | Fuji | `0xF4D2615B9FDE71B848d424D27714c19E8739C707` |
@@ -30,7 +30,7 @@ Deployed contracts (addresses in `deployment.json` on the laptop):
 One Linux host (x86-64) for the relayer, the updater and the Fuji node:
 
 - **CPU / RAM:** 8+ vCPU, 16 GB RAM. A Step proof takes ≈ 9 s on 10 cores; a Rotate ≈ 25 s and ≈ 7 GB with `GOMEMLIMIT=6GiB`.
-- **Disk:** 20 GB SSD (proving keys 2.8 GB, Fuji P-Chain data ≈ 2 GB and growing slowly, relayer database small).
+- **Disk:** 20 GB SSD (proving keys 3.7 GB, Fuji P-Chain data ≈ 2 GB and growing slowly, relayer database small).
 - **Inbound:** TCP 9651 (avalanchego p2p) from anywhere is recommended. Keep 9650 (avalanchego API) on localhost. Expose 18080 (relayer health) and 19090 (Prometheus metrics) only to monitoring.
 - **Outbound:** HTTPS/WSS to the Fuji RPCs below, TCP 8545/8546/3500 to the Sepolia node, and TCP 9651 to Fuji validators (signature aggregation).
 
@@ -48,7 +48,7 @@ Run **one** updater per updater key and **one** relayer per relayer key: two ins
 
 ## Artifacts to copy from the laptop
 
-- **Proving keys:** `avax-light-client/keys/` (`step_512.*`, `rotate_512.*`, 2.8 GB) to `/var/lib/lc-updater/keys`. They match the verifiers deployed on Fuji. **Do not regenerate them**: new keys need new verifiers and a new light client.
+- **Proving keys:** `avax-light-client/keys/` (`step_512.*`, `rotate_512.*`, 3.7 GB) to `/var/lib/lc-updater/keys`. They match the verifiers deployed on Fuji. **Do not regenerate them**: new keys need new verifiers and a new light client.
 
 ## Build
 
@@ -59,9 +59,9 @@ Go 1.26 for both. The light-client module is private (`GOPRIVATE=github.com/dece
 curl -LO https://github.com/ava-labs/avalanchego/releases/download/v1.15.2/avalanchego-linux-amd64-v1.15.2.tar.gz
 tar xzf avalanchego-linux-amd64-v1.15.2.tar.gz && install avalanchego-v1.15.2/avalanchego /opt/bridge/bin/
 
-# Updater: commit 65f22eb pins the decentrio/gnark fork the proving keys were made with
+# Updater: commit dd95dd5 pins the decentrio/gnark fork (a6330801) the proving keys were made with
 git clone git@github.com:decentrio/avax-light-client.git && cd avax-light-client
-git checkout 65f22eb && go build -o /opt/bridge/bin/updater ./cmd/updater
+git checkout dd95dd5 && go build -o /opt/bridge/bin/updater ./cmd/updater
 
 # Relayer: icm-services fork, branch hieu/sepolia-fuji-demo (1b56d2356 or later)
 git clone git@github.com:decentrio/icm-services.git && cd icm-services
@@ -105,7 +105,7 @@ The pages live in `decentrio/Dividend-Bridge-UI`, branch `feat/fuji-sepolia-moni
 | Fuji node | `info.isBootstrapped` (P) is `true` |
 | Relayer up | `curl -s localhost:18080/health` → `"status":"up"`; log `Initialization complete`, then `Connected to sufficient stake` |
 | Updater up | log `stepping on demand for messages from 0x59D6…`, then `tick done … latest finalized slot N` every 12 s |
-| Light client | `cast call 0x4fc01ae40bf56e5b517af7b1f6424d1074313e5c 'latestFinalizedSlot()(uint64)' --rpc-url https://api.avax-test.network/ext/bc/C/rpc` advances after each `submitStep` |
+| Light client | `cast call 0xb72fefdfde361319ebb54bb2f9fef5fa70b42efe 'latestFinalizedSlot()(uint64)' --rpc-url https://api.avax-test.network/ext/bc/C/rpc` advances after each `submitStep` |
 | End to end | Send 1 EXMP Sepolia → Fuji and 0.5 EXMP.e back (`go run ./scripts/tools/sepolia-fuji-ictt send …`, or the UI's Bridge page). Relayer logs `Delivered message to destination chain` for each; the UI monitor shows both as Delivered. |
 
 Alert on:
@@ -117,6 +117,6 @@ Alert on:
 ## Limits
 
 - **Validator set on Sepolia is frozen** at Fuji P-Chain height 303781 (59 validators). Avalanche validators running stock avalanchego do not sign the registry's update message, so it cannot follow Fuji's validator set. Fuji → Sepolia keeps working while validators holding ≥ 67% of that set's stake stay online; at current stake end times that holds until about **March 2027**. When deliveries start failing on insufficient stake, ask the dev team to redeploy the registry.
-- **Development proving keys** and an older `decentrio/gnark` commit: fine for testnet, not for production.
+- **Development proving keys**, not from a ceremony: fine for testnet, not for production.
 - **Rotate** must land at least once per sync-committee period (≈ 27 h); the updater does it automatically. If the updater is down for longer, it catches up on restart as long as the beacon node still serves the missed periods' light-client updates.
 - The demo traffic loop (`sepolia-fuji-run/loop.sh` on the laptop) is not part of the deployment.

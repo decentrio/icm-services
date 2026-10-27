@@ -31,16 +31,16 @@ Mỗi key chỉ cho **một** tiến trình dùng, nếu không sẽ trùng nonc
 # avalanchego: tải bản release v1.15.2
 curl -LO https://github.com/ava-labs/avalanchego/releases/download/v1.15.2/avalanchego-linux-amd64-v1.15.2.tar.gz
 
-# updater (đúng commit 65f22eb, khớp với proving key)
+# updater (đúng commit dd95dd5, khớp với proving key)
 git clone git@github.com:decentrio/avax-light-client.git && cd avax-light-client
-git checkout 65f22eb && go build -o /opt/bridge/bin/updater ./cmd/updater
+git checkout dd95dd5 && go build -o /opt/bridge/bin/updater ./cmd/updater
 
 # relayer
 git clone git@github.com:decentrio/icm-services.git && cd icm-services
 git checkout hieu/sepolia-fuji-demo && go build -o /opt/bridge/bin/icm-relayer ./relayer/main
 ```
 
-Copy thêm thư mục proving key `avax-light-client/keys/` (2,8 GB, lấy từ máy dev) vào `/var/lib/lc-updater/keys`. **Không tạo lại key.**
+Copy thêm thư mục proving key `avax-light-client/keys/` (3,7 GB, lấy từ máy dev) vào `/var/lib/lc-updater/keys`. **Không tạo lại key.**
 
 ## 4. Cấu hình
 
@@ -96,6 +96,33 @@ Thử chuyển 1 EXMP Sepolia → Fuji (mất ~15–20 phút) và 0,5 EXMP.e Fuj
 - health khác `up`;
 - message Sepolia → Fuji chờ quá 30 phút, hoặc Fuji → Sepolia chờ quá 2 phút;
 - relayer key còn < 0,01 ETH hoặc < 0,05 AVAX, updater key còn < 0,02 AVAX.
+
+## Chuyển server đang chạy sang light client v2 (mạch 2,86M)
+
+Chỉ dành cho server đã chạy bản cũ (light client `0x4fc0…5e5c`). Dev đã deploy sẵn light client, adapter và messenger v2; cặp EXMP ⇄ EXMP.e giữ nguyên địa chỉ và số dư.
+
+1. **Chuẩn bị** (hệ thống cũ vẫn chạy):
+   - Build updater mới: `git checkout dd95dd5 && go build -o /opt/bridge/bin/updater-v2 ./cmd/updater` trong `avax-light-client`.
+   - Copy proving key mới (3,7 GB, dev gửi) vào `/var/lib/lc-updater/keys-v2`.
+   - Đặt `relayer.json` mới (dev gửi, chỉ khác 3 địa chỉ) ở `/etc/bridge/relayer-v2.json`, mode 600.
+2. **Chờ hết giao dịch đang đi dở:** trên trang Monitor, mọi dòng đều `Delivered`.
+3. **Dừng bản cũ:** `systemctl stop icm-relayer lc-updater`.
+4. **Báo dev đổi route:** dev chuyển cặp EXMP sang messenger mới (4 giao dịch từ ví admin, khoảng 1 phút).
+5. **Chạy bản mới:**
+   ```sh
+   mv /etc/bridge/relayer-v2.json /etc/bridge/relayer.json
+   # trong /etc/systemd/system/lc-updater.service:
+   #   /opt/bridge/bin/updater          → /opt/bridge/bin/updater-v2
+   #   -contract 0x4fc0…  → -contract 0xb72fefdfde361319ebb54bb2f9fef5fa70b42efe
+   #   -adapter  0x59d6…  → -adapter  0xf76523ba1dc38a930c63a0e64ca5efd853f52413
+   #   -keys /var/lib/lc-updater/keys → -keys /var/lib/lc-updater/keys-v2
+   systemctl daemon-reload && systemctl start lc-updater icm-relayer
+   ```
+   Updater key giữ nguyên (`0x51Fd…`, đã được cấp quyền trên light client v2).
+6. **Deploy UI** nhánh `feat/fuji-sepolia-monitor` (commit `1c789b1` trở đi).
+7. **Kiểm tra:** log updater có `stepping on demand for messages from 0xF765…`, rồi chuyển thử 1 EXMP mỗi chiều.
+
+**Quay lại bản cũ nếu lỗi:** dev đổi route cặp EXMP về messenger cũ, infra khôi phục `relayer.json` và unit cũ.
 
 ## Giới hạn (chỉ dùng cho testnet)
 

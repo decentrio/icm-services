@@ -13,10 +13,10 @@ Environment=GOMEMLIMIT=6GiB
 ExecStart=/opt/bridge/bin/updater \
   -beacon http://<SEPOLIA_CL>:3500 \
   -rpc https://api.avax-test.network/ext/bc/C/rpc \
-  -contract 0x4fc01ae40bf56e5b517af7b1f6424d1074313e5c \
+  -contract 0xb72fefdfde361319ebb54bb2f9fef5fa70b42efe \
   -keys /var/lib/lc-updater/keys \
   -demand-rpc http://<SEPOLIA_EL>:8545 \
-  -adapter 0x59d6683a899a5374a9396b8c3c67a8586bfd9add \
+  -adapter 0xf76523ba1dc38a930c63a0e64ca5efd853f52413 \
   -step-interval 1h \
   -interval 12s
 Restart=always
